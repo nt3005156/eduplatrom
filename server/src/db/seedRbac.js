@@ -47,6 +47,11 @@ export const PERMISSIONS = [
   { key: 'fees.signoff_daily', module: 'fees', label: 'Sign off the daily fee audit', description: 'Sign off or return the daily fee reconciliation summary. Granted to the Finance Manager.', is_dangerous: 1, admin_only: 0 },
   { key: 'fees.verify_payment', module: 'fees', label: 'Verify cash and bank payments', description: 'Count and finalize a cash receipt, or verify a bank deposit, that someone else recorded. Granted by default to the Finance Officer role only.', is_dangerous: 1 },
   { key: 'fees.refund', module: 'fees', label: 'Refund payments', description: 'Reverse a payment. Creates an audited negative entry.', is_dangerous: 1, admin_only: 1 },
+  // exams (Phase 4). Marks are scoped to the teacher's own class, section and subject with isWithinScope().
+  { key: 'exams.view', module: 'exams', label: 'View exams and marks', description: 'Exams and marks for classes and subjects in scope. Draft marks are visible to staff only.' },
+  { key: 'exams.enter_marks', module: 'exams', label: 'Enter exam marks', description: 'Enter or change marks for students in the teacher\'s own class, section and subject. Blocked once an exam is published.' },
+  { key: 'exams.manage', module: 'exams', label: 'Manage exam terms, exams and grading scales', description: 'Create terms, exams and custom grading scales.' },
+  { key: 'exams.publish', module: 'exams', label: 'Publish and unpublish exam results', description: 'Publish marks to guardians once every student has a mark or an absent flag. Unpublishing needs a reason and is audited.', is_dangerous: 1 },
   // content
   { key: 'content.create', module: 'content', label: 'Create learning content', description: 'Upload notes/videos/PDFs for an assigned subject.' },
   { key: 'content.archive', module: 'content', label: 'Archive content', description: '' },
@@ -90,6 +95,7 @@ export const ROLE_DEFAULTS = {
     'assignment.create': 'allow', 'assignment.publish': 'allow', 'assignment.delete': 'allow',
     'quiz.create': 'allow', 'quiz.publish': 'allow', 'quiz.delete': 'allow',
     'grade.create': 'allow',
+    'exams.view': 'allow', 'exams.enter_marks': 'allow',
     'analytics.view_class': 'allow',
     // Subject Teachers can announce to their own assigned class/section
     // about their subject (e.g. "Math test moved to Friday") — scoped to
@@ -103,6 +109,7 @@ export const ROLE_DEFAULTS = {
     'assignment.create': 'allow', 'assignment.publish': 'allow', 'assignment.delete': 'allow',
     'quiz.create': 'allow', 'quiz.publish': 'allow', 'quiz.delete': 'allow',
     'grade.create': 'allow',
+    'exams.view': 'allow', 'exams.enter_marks': 'allow',
     'analytics.view_class': 'allow',
     'communication.broadcast_class': 'allow',
     'attendance.mark': 'allow', 'attendance.view': 'allow',
@@ -119,6 +126,7 @@ export const ROLE_DEFAULTS = {
   exam_coordinator: {
     'quiz.create': 'allow', 'quiz.publish': 'allow',
     'grade.create': 'allow', 'grade.override': 'allow',
+    'exams.view': 'allow', 'exams.manage': 'allow', 'exams.publish': 'allow',
     'analytics.view_school_wide': 'allow',
   },
   academic_head: {
@@ -127,6 +135,7 @@ export const ROLE_DEFAULTS = {
     'assignment.create': 'allow', 'assignment.publish': 'allow', 'assignment.delete': 'allow',
     'quiz.create': 'allow', 'quiz.publish': 'allow', 'quiz.delete': 'allow',
     'grade.create': 'allow', 'grade.override': 'allow',
+    'exams.view': 'allow',
     'audit.view': 'allow',
     'analytics.view_school_wide': 'allow', 'analytics.view_class': 'allow',
     'communication.broadcast_school': 'allow', 'communication.broadcast_class': 'allow',

@@ -185,7 +185,7 @@ function GuardianDetail({ id, onClose, onChanged }) {
               </div>
             </div>
             <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 8, fontSize: 13.5 }}>
-              {[['is_primary', 'Primary contact'], ['can_view_attendance', 'Attendance'], ['can_view_fees', 'Fees (Phase 3)'], ['can_pickup', 'Pickup']].map(([k, label]) => (
+              {[['is_primary', 'Primary contact'], ['can_view_attendance', 'Attendance'], ['can_view_fees', 'Fees (Phase 3)'], ['can_view_results', 'Exam results (published only)'], ['can_pickup', 'Pickup']].map(([k, label]) => (
                 <label key={k} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                   <input type="checkbox" checked={!!l[k]} onChange={e => patchLink(l.student_id, { [k]: e.target.checked })} /> {label}
                 </label>

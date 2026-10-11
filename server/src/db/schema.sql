@@ -710,6 +710,8 @@ CREATE TABLE IF NOT EXISTS guardian_students (
   can_view_fees INTEGER NOT NULL DEFAULT 0,
   can_pay_fees INTEGER NOT NULL DEFAULT 0,
   can_pickup INTEGER NOT NULL DEFAULT 0,
+  -- Published exam marks and results (Phase 4). Unpublished marks are never shown, whatever this flag says.
+  can_view_results INTEGER NOT NULL DEFAULT 1,
   -- Custody or record restriction. When 1, the guardian sees nothing about this child.
   restricted INTEGER NOT NULL DEFAULT 0,
   created_by INTEGER REFERENCES users(id),
@@ -1042,3 +1044,80 @@ CREATE TABLE IF NOT EXISTS fee_daily_signoffs (
   decision_note TEXT,
   created_at TEXT DEFAULT (datetime('now'))
 );
+
+-- ---------------------------------------------------------------------
+-- Phase 4: exams, marks, grading. See services/exams/grading.js for the rules.
+-- ---------------------------------------------------------------------
+
+-- Grading scales are versioned by name, one per directive or academic year.
+-- Bands are read-only once an exam uses the scale; a new year gets a new scale.
+CREATE TABLE IF NOT EXISTS grading_scales (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS grading_bands (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scale_id INTEGER NOT NULL REFERENCES grading_scales(id) ON DELETE CASCADE,
+  min_percent REAL NOT NULL CHECK(min_percent >= 0 AND min_percent <= 100),
+  grade TEXT NOT NULL,
+  grade_point REAL,
+  is_pass INTEGER NOT NULL CHECK(is_pass IN (0,1)),
+  UNIQUE(scale_id, min_percent),
+  UNIQUE(scale_id, grade)
+);
+
+CREATE TABLE IF NOT EXISTS exam_terms (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id INTEGER NOT NULL REFERENCES academic_sessions(id),
+  name TEXT NOT NULL,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(session_id, name)
+);
+
+-- One exam = one subject for one class (and optionally one section) in one term.
+-- theory_full and internal_full are set for split exams (SEE: 75 + 25 = 100).
+CREATE TABLE IF NOT EXISTS exams (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  term_id INTEGER NOT NULL REFERENCES exam_terms(id),
+  class_level INTEGER NOT NULL,
+  section TEXT,
+  subject_id INTEGER NOT NULL REFERENCES subjects(id),
+  exam_date TEXT,
+  full_marks REAL NOT NULL CHECK(full_marks > 0),
+  theory_full REAL,
+  internal_full REAL,
+  grading_scale_id INTEGER NOT NULL REFERENCES grading_scales(id),
+  status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','published')),
+  published_at TEXT,
+  published_by INTEGER REFERENCES users(id),
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(term_id, class_level, section, subject_id)
+);
+CREATE INDEX IF NOT EXISTS idx_exams_term ON exams(term_id);
+
+-- Marks are stored with their computed grade so a published result never changes
+-- when a scale is edited later. Absent is a flag, not a score.
+CREATE TABLE IF NOT EXISTS exam_marks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  exam_id INTEGER NOT NULL REFERENCES exams(id) ON DELETE CASCADE,
+  student_id INTEGER NOT NULL REFERENCES users(id),
+  is_absent INTEGER NOT NULL DEFAULT 0 CHECK(is_absent IN (0,1)),
+  theory REAL,
+  internal REAL,
+  total REAL,
+  percent REAL,
+  grade TEXT NOT NULL,
+  grade_point REAL,
+  is_pass INTEGER NOT NULL DEFAULT 0,
+  entered_by INTEGER REFERENCES users(id),
+  entered_by_emp_no TEXT,
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(exam_id, student_id)
+);
+CREATE INDEX IF NOT EXISTS idx_exam_marks_student ON exam_marks(student_id);
+

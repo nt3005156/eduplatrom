@@ -14,7 +14,7 @@ import { accessibleLink, visibleChildren, attendanceTally, guardianRoleId } from
 export const adminRouter = Router();
 export const portalRouter = Router();
 
-const FLAGS = ['is_primary', 'can_view_attendance', 'can_view_fees', 'can_pay_fees', 'can_pickup', 'restricted'];
+const FLAGS = ['is_primary', 'can_view_attendance', 'can_view_fees', 'can_view_results', 'can_pay_fees', 'can_pickup', 'restricted'];
 
 function setupUrl(req, raw) {
   const origin = process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
@@ -46,7 +46,7 @@ function guardianOr404(id) {
 
 function linksFor(guardianId) {
   return db.prepare(`
-    SELECT gs.id, gs.student_id, gs.relationship, gs.is_primary, gs.can_view_attendance, gs.can_view_fees,
+    SELECT gs.id, gs.student_id, gs.relationship, gs.is_primary, gs.can_view_attendance, gs.can_view_fees, gs.can_view_results,
            gs.can_pay_fees, gs.can_pickup, gs.restricted, s.name AS student_name, s.class_level, s.section, s.roll_no
     FROM guardian_students gs JOIN users s ON s.id = gs.student_id
     WHERE gs.guardian_id = ? ORDER BY s.class_level, s.section, s.name`).all(guardianId);
@@ -116,10 +116,10 @@ adminRouter.post('/', requireAuth, requireAdmin, handle((req, res) => {
       .run(String(name).trim(), email, unknownPasswordHash(), phone.value, guardianRoleId());
     guardianId = Number(info.lastInsertRowid);
     for (const { student, flags } of plan) {
-      db.prepare(`INSERT INTO guardian_students (guardian_id, student_id, relationship, is_primary, can_view_attendance, can_view_fees, can_pay_fees, can_pickup, restricted, created_by)
-        VALUES (?,?,?,?,?,?,?,?,?,?)`)
+      db.prepare(`INSERT INTO guardian_students (guardian_id, student_id, relationship, is_primary, can_view_attendance, can_view_fees, can_view_results, can_pay_fees, can_pickup, restricted, created_by)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
         .run(guardianId, student.id, flags.relationship, flags.is_primary ?? 0, flags.can_view_attendance ?? 1, flags.can_view_fees ?? 0,
-          flags.can_pay_fees ?? 0, flags.can_pickup ?? 0, flags.restricted ?? 0, req.user.id);
+          flags.can_view_results ?? 1, flags.can_pay_fees ?? 0, flags.can_pickup ?? 0, flags.restricted ?? 0, req.user.id);
     }
     raw = createSetupToken(guardianId, req.user.id);
     logAudit(req, {
@@ -153,13 +153,13 @@ adminRouter.post('/:id/students', requireAuth, requireAdmin, handle((req, res) =
   const student = studentOrThrow(req.body?.student_id);
   const flags = parseFlags(req.body, { relationship: req.body?.relationship || 'guardian' });
   const before = db.prepare('SELECT * FROM guardian_students WHERE guardian_id = ? AND student_id = ?').get(g.id, student.id);
-  db.prepare(`INSERT INTO guardian_students (guardian_id, student_id, relationship, is_primary, can_view_attendance, can_view_fees, can_pay_fees, can_pickup, restricted, created_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?)
+  db.prepare(`INSERT INTO guardian_students (guardian_id, student_id, relationship, is_primary, can_view_attendance, can_view_fees, can_view_results, can_pay_fees, can_pickup, restricted, created_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(guardian_id, student_id) DO UPDATE SET relationship = excluded.relationship, is_primary = excluded.is_primary,
-      can_view_attendance = excluded.can_view_attendance, can_view_fees = excluded.can_view_fees, can_pay_fees = excluded.can_pay_fees,
-      can_pickup = excluded.can_pickup, restricted = excluded.restricted`)
+      can_view_attendance = excluded.can_view_attendance, can_view_fees = excluded.can_view_fees, can_view_results = excluded.can_view_results,
+      can_pay_fees = excluded.can_pay_fees, can_pickup = excluded.can_pickup, restricted = excluded.restricted`)
     .run(g.id, student.id, flags.relationship, flags.is_primary ?? 0, flags.can_view_attendance ?? 1, flags.can_view_fees ?? 0,
-      flags.can_pay_fees ?? 0, flags.can_pickup ?? 0, flags.restricted ?? 0, req.user.id);
+      flags.can_view_results ?? 1, flags.can_pay_fees ?? 0, flags.can_pickup ?? 0, flags.restricted ?? 0, req.user.id);
   logAudit(req, { module: 'guardians', action: before ? 'updated' : 'linked',
     description: `${before ? 'Updated link to' : 'Linked'} ${student.name} for guardian ${g.name}`,
     previousValue: before || null, newValue: { guardian_id: g.id, student_id: student.id, ...flags } });
@@ -173,9 +173,9 @@ adminRouter.patch('/:id/students/:studentId', requireAuth, requireAdmin, handle(
   if (!before) return res.status(404).json({ error: 'This child is not linked to this guardian' });
   const flags = parseFlags(req.body, before);
   db.prepare(`UPDATE guardian_students SET relationship = ?, is_primary = ?, can_view_attendance = ?, can_view_fees = ?,
-      can_pay_fees = ?, can_pickup = ?, restricted = ? WHERE id = ?`)
-    .run(flags.relationship, flags.is_primary, flags.can_view_attendance, flags.can_view_fees, flags.can_pay_fees,
-      flags.can_pickup, flags.restricted, before.id);
+      can_view_results = ?, can_pay_fees = ?, can_pickup = ?, restricted = ? WHERE id = ?`)
+    .run(flags.relationship, flags.is_primary, flags.can_view_attendance, flags.can_view_fees, flags.can_view_results ?? 1,
+      flags.can_pay_fees, flags.can_pickup, flags.restricted, before.id);
   logAudit(req, { module: 'guardians', action: 'updated', description: `Changed access for guardian ${g.name} on student #${before.student_id}`,
     previousValue: before, newValue: flags });
   res.json({ links: linksFor(g.id) });

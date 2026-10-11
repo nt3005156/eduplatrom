@@ -1,0 +1,146 @@
+// Grading engine. Pure functions only: no database, no clock, no I/O.
+// Everything here is decided from the marks and the scale bands passed in, so the
+// boundary tests in test/exams-grading.test.js can pin every rule.
+//
+// Rules:
+//  - A band applies when percent >= band.min_percent (lower bound inclusive).
+//    89.99 is A, 90 is A+. 34.99 is NG, 35 is D.
+//  - Percent = total / full_marks * 100, compared as entered. No rounding up.
+//    A tiny epsilon absorbs float noise (e.g. 67.5 + 22.5 computed in binary).
+//  - SEE split: theory (out of 75) + internal (out of 25) = total (out of 100).
+//  - A subject mark below the scale's pass band (NG for SEE) fails that subject.
+//    The overall result rule is a report-card concern, not this module's.
+//  - Absent is its own state (grade 'AB'), never a band. It is not a score of 0.
+
+export const ABSENT_GRADE = 'AB';
+const EPS = 1e-9;
+
+// NEB SEE letter grades, 4.0 scale. Versioned by academic year in grading_scales.
+// Confirm against the official directive for each year before go-live.
+export const SEE_SCALE_NAME = 'SEE letter grades (NEB, 4.0 scale)';
+export const SEE_BANDS = Object.freeze([
+  { min_percent: 90, grade: 'A+', grade_point: 4.0, is_pass: 1 },
+  { min_percent: 80, grade: 'A', grade_point: 3.6, is_pass: 1 },
+  { min_percent: 70, grade: 'B+', grade_point: 3.2, is_pass: 1 },
+  { min_percent: 60, grade: 'B', grade_point: 2.8, is_pass: 1 },
+  { min_percent: 50, grade: 'C+', grade_point: 2.4, is_pass: 1 },
+  { min_percent: 40, grade: 'C', grade_point: 2.0, is_pass: 1 },
+  { min_percent: 35, grade: 'D', grade_point: 1.6, is_pass: 1 },
+  { min_percent: 0, grade: 'NG', grade_point: null, is_pass: 0 },
+]);
+
+export const SEE_SPLIT = Object.freeze({ theory_full: 75, internal_full: 25 });
+
+export class GradingError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'GradingError';
+  }
+}
+
+const isNum = x => typeof x === 'number' && Number.isFinite(x);
+// At most two decimal places. Compared with a tolerance so 33.33 is accepted.
+const twoDp = x => Math.abs(x * 100 - Math.round(x * 100)) < 1e-6;
+
+/**
+ * Validates and normalises a scale's bands. Returns them sorted high to low.
+ * Rules: 1..20 bands, min_percent in [0,100] with at most 2 dp and unique,
+ * a band at 0 (so every mark has a grade), unique grade codes, no 'AB'
+ * (reserved for absent), grade_point null or >= 0, is_pass 0 or 1.
+ */
+export function validateBands(bands) {
+  if (!Array.isArray(bands) || bands.length < 1 || bands.length > 20) {
+    throw new GradingError('A scale needs between 1 and 20 bands');
+  }
+  const seenMin = new Set();
+  const seenGrade = new Set();
+  const out = bands.map((b, i) => {
+    if (!b || typeof b !== 'object') throw new GradingError(`Band ${i + 1} is not an object`);
+    const min = b.min_percent;
+    if (!isNum(min) || min < 0 || min > 100 || !twoDp(min)) {
+      throw new GradingError(`Band ${i + 1}: min_percent must be a number from 0 to 100 with at most 2 decimals`);
+    }
+    if (seenMin.has(min)) throw new GradingError(`Band ${i + 1}: min_percent ${min} is used twice`);
+    seenMin.add(min);
+    const grade = typeof b.grade === 'string' ? b.grade.trim() : '';
+    if (!grade || grade.length > 5) throw new GradingError(`Band ${i + 1}: grade must be 1 to 5 characters`);
+    if (grade.toUpperCase() === ABSENT_GRADE) throw new GradingError(`'${ABSENT_GRADE}' is reserved for absent`);
+    if (seenGrade.has(grade)) throw new GradingError(`Grade '${grade}' appears twice`);
+    seenGrade.add(grade);
+    const gp = b.grade_point ?? null;
+    if (gp !== null && (!isNum(gp) || gp < 0)) throw new GradingError(`Band ${i + 1}: grade_point must be empty or >= 0`);
+    if (b.is_pass !== 0 && b.is_pass !== 1) throw new GradingError(`Band ${i + 1}: is_pass must be 0 or 1`);
+    return { min_percent: min, grade, grade_point: gp, is_pass: b.is_pass };
+  });
+  if (!seenMin.has(0)) throw new GradingError('The scale needs a band starting at 0 so every mark has a grade');
+  return out.sort((a, b) => b.min_percent - a.min_percent);
+}
+
+/** Band for a percentage. Bands must be sorted high to low (validateBands does this). */
+export function gradeFor(percent, bands) {
+  if (!isNum(percent) || percent < 0) throw new GradingError('percent must be a number >= 0');
+  for (const b of bands) {
+    if (percent + EPS >= b.min_percent) return b;
+  }
+  throw new GradingError('No band covers this percentage (scale has no band at 0)');
+}
+
+/**
+ * Validates an exam's marks configuration.
+ * Split exams (SEE) have theory_full + internal_full = full_marks.
+ * Non-split exams have theory_full and internal_full both null.
+ */
+export function validateExamMarks({ full_marks, theory_full = null, internal_full = null }) {
+  if (!isNum(full_marks) || full_marks <= 0 || full_marks > 1000 || !twoDp(full_marks)) {
+    throw new GradingError('full_marks must be a number above 0 and up to 1000');
+  }
+  const hasTheory = theory_full !== null && theory_full !== undefined;
+  const hasInternal = internal_full !== null && internal_full !== undefined;
+  if (!hasTheory && !hasInternal) return { split: false, full_marks, theory_full: null, internal_full: null };
+  if (!hasTheory || !hasInternal) throw new GradingError('Give both theory_full and internal_full, or neither');
+  if (!isNum(theory_full) || theory_full <= 0 || !isNum(internal_full) || internal_full <= 0) {
+    throw new GradingError('theory_full and internal_full must be above 0');
+  }
+  if (Math.abs(theory_full + internal_full - full_marks) > EPS) {
+    throw new GradingError('theory_full + internal_full must equal full_marks');
+  }
+  return { split: true, full_marks, theory_full, internal_full };
+}
+
+/**
+ * Validates one mark entry against the exam's config.
+ * Input: { student_id, absent?, theory?, internal?, mark? }
+ * Returns { absent: 0|1, theory, internal, total }. total is null when absent.
+ */
+export function validateMarkInput(exam, input) {
+  if (input.absent === true) return { absent: 1, theory: null, internal: null, total: null };
+  const checkRange = (v, max, label) => {
+    if (!isNum(v) || v < 0 || v > max || !twoDp(v)) {
+      throw new GradingError(`${label} must be a number from 0 to ${max} (at most 2 decimals)`);
+    }
+    return v;
+  };
+  if (exam.theory_full !== null && exam.theory_full !== undefined) {
+    const theory = checkRange(input.theory, exam.theory_full, 'theory');
+    const internal = checkRange(input.internal, exam.internal_full, 'internal');
+    // Marks have at most 2 decimals, so round the sum to remove binary float noise (24.99 + 10 is not exact).
+    return { absent: 0, theory, internal, total: Math.round((theory + internal) * 100) / 100 };
+  }
+  const total = checkRange(input.mark, exam.full_marks, 'mark');
+  return { absent: 0, theory: null, internal: null, total };
+}
+
+/**
+ * Full result for one mark row, given the exam and the scale bands.
+ * Stored on exam_marks so report cards do not change when a scale is edited later.
+ */
+export function computeResult(exam, input, bands) {
+  const v = validateMarkInput(exam, input);
+  if (v.absent) {
+    return { ...v, percent: null, grade: ABSENT_GRADE, grade_point: null, is_pass: 0 };
+  }
+  const raw = (v.total / exam.full_marks) * 100;
+  const band = gradeFor(raw, bands); // the band is decided on the unrounded value
+  const percent = Math.round(raw * 1e4) / 1e4; // stored for display, 4 dp
+  return { ...v, percent, grade: band.grade, grade_point: band.grade_point, is_pass: band.is_pass };
+}

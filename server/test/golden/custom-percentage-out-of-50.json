@@ -1,0 +1,16 @@
+{
+  "scale": "Example custom percentage scale, out of 50 (same bands as custom-percentage.json)",
+  "bands": [
+    { "min_percent": 80, "grade": "A", "grade_point": 4.0, "is_pass": 1 },
+    { "min_percent": 70, "grade": "B", "grade_point": 3.0, "is_pass": 1 },
+    { "min_percent": 60, "grade": "C", "grade_point": 2.0, "is_pass": 1 },
+    { "min_percent": 50, "grade": "D", "grade_point": 1.0, "is_pass": 1 },
+    { "min_percent": 0, "grade": "F", "grade_point": 0.0, "is_pass": 0 }
+  ],
+  "exam": { "full_marks": 50 },
+  "cases": [
+    { "note": "25 of 50 is exactly 50%", "mark": 25, "grade": "D", "grade_point": 1.0, "is_pass": 1 },
+    { "note": "24.99 of 50 is just under 50%", "mark": 24.99, "grade": "F", "grade_point": 0.0, "is_pass": 0 },
+    { "note": "40 of 50 is exactly 80%", "mark": 40, "grade": "A", "grade_point": 4.0, "is_pass": 1 }
+  ]
+}

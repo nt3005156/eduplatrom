@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { seedRbac } from './seedRbac.js';
+import { seedGradingScales } from './seedGrading.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'nitex.db');
@@ -28,6 +29,8 @@ function addColumnIfMissing(table, column, def) {
 }
 
 addColumnIfMissing('users', 'theme_preference', "TEXT DEFAULT 'light'");
+// Phase 4: guardians may see published exam results. Existing links default to visible; restricted links still see nothing.
+addColumnIfMissing('guardian_students', 'can_view_results', 'INTEGER NOT NULL DEFAULT 1');
 // Bumped on password reset, disable, archive or anonymize. Tokens carry the version they were issued under.
 addColumnIfMissing('users', 'session_version', 'INTEGER DEFAULT 0');
 addColumnIfMissing('users', 'approval_status', "TEXT DEFAULT 'approved'");
@@ -385,6 +388,7 @@ addColumnIfMissing('users', 'locked_until', 'TEXT');
 // "idempotent seed on boot" convention (see seed.js).
 // ---------------------------------------------------------------------
 seedRbac(db);
+seedGradingScales(db);
 
 export default db;
 export { isNew };

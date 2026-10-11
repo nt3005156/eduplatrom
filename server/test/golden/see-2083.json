@@ -1,0 +1,37 @@
+{
+  "scale": "SEE letter grades (NEB, 4.0 scale)",
+  "version_note": "Matches the 2026 published SEE tables. Confirm against the official directive for each academic year before go-live.",
+  "bands": [
+    { "min_percent": 90, "grade": "A+", "grade_point": 4.0, "is_pass": 1 },
+    { "min_percent": 80, "grade": "A", "grade_point": 3.6, "is_pass": 1 },
+    { "min_percent": 70, "grade": "B+", "grade_point": 3.2, "is_pass": 1 },
+    { "min_percent": 60, "grade": "B", "grade_point": 2.8, "is_pass": 1 },
+    { "min_percent": 50, "grade": "C+", "grade_point": 2.4, "is_pass": 1 },
+    { "min_percent": 40, "grade": "C", "grade_point": 2.0, "is_pass": 1 },
+    { "min_percent": 35, "grade": "D", "grade_point": 1.6, "is_pass": 1 },
+    { "min_percent": 0, "grade": "NG", "grade_point": null, "is_pass": 0 }
+  ],
+  "exam": { "full_marks": 100, "theory_full": 75, "internal_full": 25 },
+  "cases": [
+    { "note": "zero", "theory": 0, "internal": 0, "grade": "NG", "grade_point": null, "is_pass": 0 },
+    { "note": "just under the D boundary", "theory": 24.99, "internal": 10, "grade": "NG", "grade_point": null, "is_pass": 0 },
+    { "note": "D starts at 35", "theory": 25, "internal": 10, "grade": "D", "grade_point": 1.6, "is_pass": 1 },
+    { "note": "just under C", "theory": 29.99, "internal": 10, "grade": "D", "grade_point": 1.6, "is_pass": 1 },
+    { "note": "C starts at 40", "theory": 30, "internal": 10, "grade": "C", "grade_point": 2.0, "is_pass": 1 },
+    { "note": "just under C+", "theory": 39.99, "internal": 10, "grade": "C", "grade_point": 2.0, "is_pass": 1 },
+    { "note": "C+ starts at 50", "theory": 40, "internal": 10, "grade": "C+", "grade_point": 2.4, "is_pass": 1 },
+    { "note": "just under B", "theory": 49.99, "internal": 10, "grade": "C+", "grade_point": 2.4, "is_pass": 1 },
+    { "note": "B starts at 60", "theory": 50, "internal": 10, "grade": "B", "grade_point": 2.8, "is_pass": 1 },
+    { "note": "just under B+", "theory": 59.99, "internal": 10, "grade": "B", "grade_point": 2.8, "is_pass": 1 },
+    { "note": "B+ starts at 70", "theory": 60, "internal": 10, "grade": "B+", "grade_point": 3.2, "is_pass": 1 },
+    { "note": "just under A", "theory": 69.99, "internal": 10, "grade": "B+", "grade_point": 3.2, "is_pass": 1 },
+    { "note": "A starts at 80", "theory": 70, "internal": 10, "grade": "A", "grade_point": 3.6, "is_pass": 1 },
+    { "note": "just under A+ (theory at its cap of 75)", "theory": 75, "internal": 14.99, "grade": "A", "grade_point": 3.6, "is_pass": 1 },
+    { "note": "A+ starts at 90 (theory at its cap of 75)", "theory": 75, "internal": 15, "grade": "A+", "grade_point": 4.0, "is_pass": 1 },
+    { "note": "75:25 split, theory at its cap, internal 0", "theory": 75, "internal": 0, "grade": "B+", "grade_point": 3.2, "is_pass": 1 },
+    { "note": "75:25 split, full marks", "theory": 75, "internal": 25, "grade": "A+", "grade_point": 4.0, "is_pass": 1 },
+    { "note": "split: 67.5 + 22.5 = 90 exactly", "theory": 67.5, "internal": 22.5, "grade": "A+", "grade_point": 4.0, "is_pass": 1 },
+    { "note": "split: 67.49 + 22.5 = 89.99", "theory": 67.49, "internal": 22.5, "grade": "A", "grade_point": 3.6, "is_pass": 1 },
+    { "note": "NG rule: total 34 is a fail even with a decent internal", "theory": 20, "internal": 14, "grade": "NG", "grade_point": null, "is_pass": 0 }
+  ]
+}
