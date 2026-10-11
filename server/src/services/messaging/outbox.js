@@ -8,6 +8,8 @@
 //  - An absence alert is not sent if the register was corrected before sending, or if the
 //    guardian's access to that child was removed.
 //  - Pausing alerts (alerts_enabled = 0) stops all sending. Nothing is lost.
+//  - Mandatory fee notices (event_kind fee_notice, e.g. an overpayment credit) are transactional statements,
+//    so opt-outs do not block them. They still obey the pause switch, the channel switch, and the quota.
 //
 // Known limit: if the process dies after a provider accepted a message but before the database
 // was updated, the message is sent again on recovery. Providers that support idempotency keys
@@ -23,6 +25,8 @@ const MAX_QUEUE_AGE_HOURS = 72;
 const SENDING_STALE_MINUTES = 5;
 const NOT_CONFIGURED_RETRY_SECONDS = 600;
 export const CHANNELS = ['sms', 'whatsapp', 'email'];
+/** Event kinds that opt-outs do not block. Transactional statements only. Not marketing, and not reminders. */
+export const MANDATORY_EVENT_KINDS = ['fee_notice'];
 
 const sqlTime = ms => new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
 
@@ -143,7 +147,7 @@ export async function processOutbox({ limit = 100 } = {}) {
     const channelOn = config[`${row.channel}_enabled`];
     if (!channelOn) { counts.held++; continue; }
 
-    if (isOptedOut(row.recipient, row.channel)) {
+    if (!MANDATORY_EVENT_KINDS.includes(row.event_kind) && isOptedOut(row.recipient, row.channel)) {
       db.prepare(`UPDATE message_outbox SET status = 'skipped_optout', updated_at = datetime('now') WHERE id = ?`).run(row.id);
       counts.skipped++; continue;
     }

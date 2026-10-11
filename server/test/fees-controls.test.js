@@ -24,13 +24,17 @@ process.env.FEES_SUPERVISOR_EMAILS = 'supervisor@school.test';
 delete process.env.FEES_TIER_SUPERVISOR_PAISA; // defaults: NPR 10,000 and NPR 50,000
 delete process.env.FEES_TIER_HEAD_PAISA;
 delete process.env.MESSAGING_EMAIL_PROVIDER;
+// Concession threshold for this file: NPR 300 (30000 paisa). Above it a concession needs the Finance Manager.
+process.env.FEES_CONCESSION_HIGH_PAISA = '30000';
 
 const { createApp } = await import('../src/app.js');
 const { default: db } = await import('../src/db/index.js');
 const { setKhaltiClientForTest, GatewayError } = await import('../src/services/fees/khalti.js');
 const { runDailyFeeJob, dispatchRows, overpaymentsOn } = await import('../src/services/fees/dailyJob.js');
 const { tierFor } = await import('../src/services/fees/money.js');
-const { creditBalance, processedBy } = await import('../src/services/fees/ledger.js');
+const { creditBalance, processedBy, concessionTier } = await import('../src/services/fees/ledger.js');
+const { queueOverpaymentEmails } = await import('../src/services/fees/notifications.js');
+const { processOutbox } = await import('../src/services/messaging/outbox.js');
 const { formatNPR } = await import('../src/services/fees/money.js');
 
 const PW = 'Ctl-Test-Pass-2026';
@@ -480,5 +484,85 @@ test('an overpayment creates an in-app notice for the guardian, which can be mar
   assert.equal((await call('clerk', 'POST', `/api/guardian/fees/notices/${n.id}/seen`, {})).status, 403, 'staff cannot use the guardian route');
   const det = await call('admin', 'GET', `/api/fees/invoices/${invoiceOf('sOver', 'Term 2')}`);
   assert.equal(det.body.credit_balance_paisa, 0, 'the credit was applied to Term 2');
+});
+
+// ---------- concession tiers ----------
+
+test('concessions: a standard one is approved by the Finance Officer; a high-value one only by the Finance Manager', async () => {
+  addUser('fmgr', { role: 'teacher', roleKey: 'finance_manager' });
+  await login('fmgr');
+  const body = (amount, reason) => ({ student_id: ID.sOld, session_id: sessionId, period: 'Term 1', fee_head_id: headTui, amount_paisa: amount, reason });
+
+  assert.equal(concessionTier(30000), 'standard', 'exactly at the threshold is standard');
+  assert.equal(concessionTier(30001), 'high', 'above the threshold is high');
+
+  const std = await call('manager', 'POST', '/api/fees/concessions', body(20000, 'Sibling discount'));
+  assert.equal(std.status, 201, JSON.stringify(std.body));
+  assert.equal((await call('clerk', 'POST', `/api/fees/concessions/${std.body.id}/decision`, { decision: 'approve' })).status, 403, 'a clerk cannot approve');
+  const stdOk = await call('officer', 'POST', `/api/fees/concessions/${std.body.id}/decision`, { decision: 'approve' });
+  assert.equal(stdOk.status, 200, JSON.stringify(stdOk.body));
+  assert.equal(stdOk.body.status, 'approved');
+
+  const high = await call('manager', 'POST', '/api/fees/concessions', body(40000, 'Part scholarship'));
+  assert.equal(high.status, 201);
+  const queue = await call('officer', 'GET', '/api/fees/concessions?status=requested&tier=high');
+  assert.equal(queue.status, 200);
+  assert.ok(queue.body.concessions.some(c => c.id === high.body.id && c.tier === 'high'), 'the high-value request is in the high-tier queue');
+  const offHigh = await call('officer', 'POST', `/api/fees/concessions/${high.body.id}/decision`, { decision: 'approve' });
+  assert.equal(offHigh.status, 403, 'the Finance Officer cannot approve a high-value concession');
+  assert.match(offHigh.body.error, /Finance Manager/);
+  const adminHigh = await call('admin', 'POST', `/api/fees/concessions/${high.body.id}/decision`, { decision: 'approve' });
+  assert.equal(adminHigh.status, 403, 'the system admin cannot approve a high-value concession either');
+  assert.match(adminHigh.body.error, /Finance Manager/);
+  const rejectOk = await call('officer', 'POST', `/api/fees/concessions/${high.body.id}/decision`, { decision: 'reject' });
+  assert.equal(rejectOk.status, 200, 'anyone with the approval permission may reject a high-value request');
+  const again = await call('fmgr', 'POST', `/api/fees/concessions/${high.body.id}/decision`, { decision: 'approve' });
+  assert.equal(again.status, 409, 'a rejected request cannot be approved later');
+
+  const high2 = await call('manager', 'POST', '/api/fees/concessions', body(40000, 'Part scholarship (second)'));
+  const fm = await call('fmgr', 'POST', `/api/fees/concessions/${high2.body.id}/decision`, { decision: 'approve' });
+  assert.equal(fm.status, 200, JSON.stringify(fm.body));
+  assert.equal(fm.body.status, 'approved');
+  const row = db.prepare('SELECT status, decided_by FROM concessions WHERE id = ?').get(high2.body.id);
+  assert.deepEqual({ ...row }, { status: 'approved', decided_by: ID.fmgr });
+  const audit = db.prepare("SELECT new_value FROM audit_logs WHERE action = 'concession_approved' ORDER BY id DESC LIMIT 1").get();
+  assert.equal(JSON.parse(audit.new_value).tier, 'high', 'the audit entry records the tier');
+});
+
+// ---------- overpayment email through the outbox ----------
+
+test('overpayment email: queued as a mandatory fee notice, and sent even to an opted-out guardian; attendance opt-outs still hold', async () => {
+  db.prepare('UPDATE messaging_config SET alerts_enabled = 1, email_enabled = 1 WHERE id = 1').run();
+  const mine = db.prepare("SELECT * FROM message_outbox WHERE event_kind = 'fee_notice' AND user_id = ?").get(ID.gOver);
+  assert.ok(mine, 'the overpayment queued an email for the guardian with fee access');
+  assert.equal(mine.channel, 'email');
+  assert.equal(mine.recipient, 'gover@ctl.test');
+  assert.equal(mine.template_id, 'fees.overpayment.v1');
+  assert.equal(mine.status, 'queued');
+  assert.match(mine.body, /An overpayment of NPR 400\.00 was detected and credited/);
+  assert.doesNotMatch(mine.body, /https?:\/\//, 'no link in version 1');
+
+  db.prepare("INSERT OR IGNORE INTO message_optouts (recipient, channel) VALUES ('gover@ctl.test', 'email')").run();
+  db.prepare(`INSERT INTO message_outbox (channel, recipient, user_id, student_id, template_id, subject, body, dedupe_key, event_kind, event_date, event_status, status)
+    VALUES ('email', 'gover@ctl.test', ?, ?, 'attendance.absent.v1', 's', 'b', 'ctl-att-optout', 'attendance', '2026-10-01', 'absent', 'queued')`).run(ID.gOver, ID.sOver);
+
+  await processOutbox({ limit: 500 });
+  assert.equal(db.prepare('SELECT status FROM message_outbox WHERE id = ?').get(mine.id).status, 'simulated',
+    'the mandatory notice goes out (log mode) despite the opt-out');
+  assert.equal(db.prepare("SELECT status FROM message_outbox WHERE dedupe_key = 'ctl-att-optout'").get().status, 'skipped_optout',
+    'an attendance alert to the same address is still blocked by the opt-out');
+});
+
+test('fee notice queueing: no valid address is recorded as no contact, and a repeat for the same notice does not duplicate', () => {
+  addUser('gNoMail', { role: 'guardian', roleKey: 'guardian', email: 'not-an-address' });
+  db.prepare('INSERT INTO guardian_students (guardian_id, student_id, can_view_fees, can_pay_fees) VALUES (?,?,1,0)').run(ID.gNoMail, ID.sRecent);
+  const first = queueOverpaymentEmails({ noticeId: 987001, studentId: ID.sRecent, amount_paisa: 1000 });
+  assert.equal(first.skipped_no_contact, 1);
+  assert.equal(first.queued, 0);
+  const second = queueOverpaymentEmails({ noticeId: 987001, studentId: ID.sRecent, amount_paisa: 1000 });
+  assert.equal(second.duplicate, 1);
+  assert.equal(second.queued, 0);
+  const row = db.prepare('SELECT status, recipient FROM message_outbox WHERE dedupe_key = ?').get(`email|none:${ID.gNoMail}|fee_notice|987001`);
+  assert.deepEqual({ ...row }, { status: 'skipped_no_contact', recipient: null });
 });
 

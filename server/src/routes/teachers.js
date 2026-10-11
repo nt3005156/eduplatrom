@@ -14,7 +14,7 @@ const router = Router();
 // teachers. Subject Teacher should NOT manage other teachers." No requireStaff
 // anywhere below — every route uses requireAdmin.
 
-const STAFF_ROLES = ['class_teacher', 'subject_teacher', 'coordinator', 'exam_controller', 'academic_head', 'finance_officer', 'lead_cashier'];
+const STAFF_ROLES = ['class_teacher', 'subject_teacher', 'coordinator', 'exam_controller', 'academic_head', 'finance_officer', 'lead_cashier', 'finance_manager'];
 
 // Maps the legacy staff_role text value to the RBAC engine's roles.key, so
 // setting a teacher's staff_role here (the existing Teacher Management UI)
@@ -30,6 +30,7 @@ const STAFF_ROLE_TO_ROLE_KEY = {
   academic_head: 'academic_head',
   finance_officer: 'finance_officer',
   lead_cashier: 'lead_cashier',
+  finance_manager: 'finance_manager',
 };
 
 function syncRoleId(userId, staffRole) {
@@ -41,6 +42,7 @@ function syncRoleId(userId, staffRole) {
 const STAFF_ROLE_LABELS = {
   finance_officer: 'Finance Officer',
   lead_cashier: 'Lead Cashier',
+  finance_manager: 'Finance Manager',
   class_teacher: 'Class Teacher',
   subject_teacher: 'Subject Teacher',
   coordinator: 'Coordinator',

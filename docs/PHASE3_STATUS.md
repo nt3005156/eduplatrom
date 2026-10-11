@@ -2,7 +2,7 @@
 
 Date: 2026-10-11. Roadmap section: [PRODUCTION_ROADMAP.md, Phase 3](PRODUCTION_ROADMAP.md#phase-3-fees-invoices-receipts-and-online-payment).
 
-**Status: backend complete in code and tested. Server suite 250 of 250 (Phase 3 tests across three files). The phase exit gate is not met.** The three controls decided on 2026-10-11 are built (section 10). The gate needs a live Khalti merchant account (sandbox end to end), a month of real fee data reconciled to the penny at a pilot school, and a first paying school. None of these can be done from this environment. The parent-facing payment screen, the admin fee screens, and the receipt PDF are not built.
+**Status: backend complete in code and tested. Server suite 253 of 253 (Phase 3 tests across three files). The phase exit gate is not met.** The three controls decided on 2026-10-11 are built (section 10). The gate needs a live Khalti merchant account (sandbox end to end), a month of real fee data reconciled to the penny at a pilot school, and a first paying school. None of these can be done from this environment. The parent-facing payment screen, the admin fee screens, and the receipt PDF are not built.
 
 Khalti is the only gateway. It stays in `none` mode (no network calls, online payment refused with 503) until `KHALTI_SECRET_KEY` is set. eSewa is deferred, as decided.
 
@@ -30,6 +30,7 @@ Khalti is the only gateway. It stays in `none` mode (no network calls, online pa
 | `FEES_SUPERVISOR_EMAILS` | Finance Supervisor / Manager, for medium-tier escalations (NPR 10,000 to 50,000). |
 | `FEES_TIER_SUPERVISOR_PAISA` | Start of the medium tier, in paisa. Default 1000000 (NPR 10,000). |
 | `FEES_TIER_HEAD_PAISA` | Start of the high tier, in paisa. Default 5000000 (NPR 50,000). |
+| `FEES_CONCESSION_HIGH_PAISA` | Concessions above this amount, in paisa, need the Finance Manager. Default 500000 (NPR 5,000). Must be a whole number of paisa, or startup fails. |
 | `FEES_CREDIT_AUTO_REFUND_DAYS` | Days of no movement before credit is refunded automatically. Default 90. |
 | `FEES_DAILY_JOB` | Set to `off` to stop the scheduled daily job. |
 | `KHALTI_SECRET_KEY` | Sandbox or live secret key. Unset means online payment is off (503 `not_configured`). |
@@ -158,7 +159,9 @@ The user answered four questions: overpayments (credit, with a refund on request
 - **Notice wording and currency (NPR, confirmed by the user).** Version 1 has **no refund link**. Its wording: "An overpayment of NPR 2,500.00 was detected and credited to your account." It goes on to say the credit is applied to the next fee invoice, and that a direct bank refund or physical refund is handled by contacting the school accounts desk. The template is `overpaymentNotice` in `services/fees/notices.js`. The refund link is planned for version 2.
 - **Channels (the user's answer).** Two channels:
   - **In-app notice (built, API only).** Each overpayment writes a row to `fee_notices`. `GET /api/guardian/fees/alerts` lists, for each linked child, the credit balance and the unseen notices, with the message text. `POST /api/guardian/fees/notices/:id/seen` marks a notice seen. The guardian portal banner or badge on login is **not built** (no client page yet).
-  - **Email (template built, sending not wired).** The template is ready. Sending it through the Phase 2 outbox is blocked: the outbox accepts only attendance and notice events, so it needs a new event kind and opt-out rules. Until that is wired, no parent email goes out.
+  - **Email (built, through the outbox).** Each overpayment queues one email per guardian who may view fees. The row is written in the same database transaction as the payment, so the payment and its notice are saved together or not at all. Event kind `fee_notice`, template `fees.overpayment.v1`, subject "Overpayment credited to your account". The guardian gets the NPR amount and the accounts-desk wording, with no link.
+  - **Mandatory, as approved on 2026-10-12.** Opt-outs do not block a `fee_notice` (`MANDATORY_EVENT_KINDS` in `services/messaging/outbox.js`). Attendance and notice messages still honor opt-outs. The notice still obeys the pause switch, the email channel switch, and the monthly quota. A queued notice not sent within 72 hours expires (the outbox rule). The in-app notice stays. A guardian with no valid email is recorded as `skipped_no_contact`. A repeat for the same notice is ignored by the dedupe key.
+  - **Counsel to confirm** that a mandatory exemption from opt-outs is acceptable for each market before go-live.
 - **Credit is shown** on each invoice (`credit_balance_paisa` in the invoice detail) and on the guardian alerts.
 - **Not built:** the refund-preference page and the link in the email (version 2).
 
@@ -169,7 +172,7 @@ The user answered four questions: overpayments (credit, with a refund on request
 - **The counter person cannot finalize their own item** (403). Both user IDs and names are kept on the row, and the audit entry `payment_verified` records `recorded_by` and `verified_by`.
 - **Bank references are unique.** The same slip cannot be recorded twice. Cash has no reference, so duplicate cash entries are caught by the second person, not by the system.
 - **Automated bank feeds and gateway payments are exempt**, as the user answered. Khalti payments post only after the server-side lookup (section 3).
-- **Who holds `fees.verify_payment`.** Granted by default to the **Finance Officer** role (`finance_officer`) only. Verification is kept apart from recording: the **Lead Cashier** (`lead_cashier`) records cash and bank money, and the Finance Officer verifies it. The Finance Officer has no `fees.collect`. The Finance Manager keeps secondary approval of high-value concessions and the daily audit sign-off (concession approval is still `admin_only`; see 10.5). The system admin keeps all fee permissions, as before.
+- **Who holds `fees.verify_payment`.** Granted by default to the **Finance Officer** role (`finance_officer`) only. Verification is kept apart from recording: the **Lead Cashier** (`lead_cashier`) records cash and bank money, and the Finance Officer verifies it. The Finance Officer has no `fees.collect`. The **Finance Manager** (`finance_manager`) approves high-value concessions (10.7). Daily audit sign-off by the Finance Manager is **not built**. The system admin keeps all fee permissions, as before.
 - **Staff numbers (EmpID), built.** Each staff account can have a unique staff number (`users.employee_no`, 1 to 20 letters, digits, or hyphens, stored uppercase). Only the system admin sets it: `PUT /api/fees/staff/:id/employee-no`. Students and guardians cannot have one. The number is **snapshotted** when a row is written: on payments, credit rows, verification rows (recorder and decider), reconciliation resolutions, and the audit log. A later change does not rewrite older rows, so an old receipt keeps the number it was printed with. An account without a number prints as `Name (no staff number)`.
 - **Receipts show who processed them.** `GET /api/fees/receipts/:receiptNo` (`fees.view`) returns the receipt with `processed_by` (`EMP-014 / Name`) and `verified_by`. The printed "Processed by:" line on a PDF is **not built** (no receipt PDF yet).
 - **Not built:** a printed draft receipt. The `DRAFT-n` number is shown in the API response only.
@@ -194,21 +197,25 @@ The user answered four questions: overpayments (credit, with a refund on request
   - `FEES_SUPERVISOR_EMAILS`: medium-tier items.
   - `FEES_HEAD_FINANCE_EMAILS`: high-tier items and 48-hour items.
 - **Dispatch is recorded honestly.** Each send is a row in `fee_dispatches` with its real status: `sent`, `simulated` (email mode `log`), `held` (no provider configured, or no recipient address), or `failed` (with the error). A missing recipient list is recorded as `held`, not dropped. Outside production the default is `log`, which sends nothing.
-- **Email transport: Google Workspace SMTP relay** (the user's choice). Set these in the server environment, never in the repository:
+- **Email transport: Google Workspace SMTP relay.** Set these in the server environment, never in the repository:
 
 ```
 MESSAGING_EMAIL_PROVIDER=smtp
 SMTP_HOST=smtp-relay.gmail.com
 SMTP_PORT=587
-SMTP_FROM=notifications@ranidevi.edu.np          # the school's domain; must be allowed by the relay
-SMTP_USER=<sending account>                     # only if SMTP AUTH is used
-SMTP_PASS=<app password>                        # only if SMTP AUTH is used
+SMTP_FROM=notifications@ranidevi.edu.np
+SMTP_USER=notifications@ranidevi.edu.np
+SMTP_PASS=<16-character app password>
 ```
 
-  - Google's relay has two ways to accept mail. **IP allowlisting** in the Workspace Admin console (send with no username or password, from the server's fixed outbound IP). Or **SMTP AUTH** with a dedicated sending account and an app password. Pick one, set it in the Admin console under the relay settings, and require TLS. Sources: [Volanea, Gmail SMTP relay setup](https://www.volanea.com/blog/gmail-smtp-relay-setup) and [Cloud Captains, Google Workspace SMTP relay](https://cloud-captains.com/en/article/how-to-configure-smtp-relay-google-workspace). Check the current Admin console labels, because they change.
-  - **TLS is required** on port 587 (STARTTLS). The transport refuses to send if the server does not offer it, so the password is never sent in clear text. `SMTP_ALLOW_PLAINTEXT=true` exists for local tests only, and it is ignored when `NODE_ENV=production`.
-  - The relay refuses a From address outside the domains the admin allowed. Use the school's domain.
-  - Not verified here: a real relay exchange. The test runs against a local SMTP server.
+  - **App Password (the user's recommendation, 2026-10-12).** (1) Turn on 2-Step Verification for `notifications@ranidevi.edu.np`. (2) Create an App Password for that account in the Google Account security settings. Copy the 16 characters once. (3) Set it as `SMTP_PASS` in the server `.env`. Never commit it, and never paste it into chat. The code sends with `SMTP_USER` and `SMTP_PASS` (`services/messaging/providers.js`).
+  - **Admin console settings** (Google Admin, Apps, Google Workspace, Gmail, Routing, SMTP relay service):
+    - *Allowed senders:* "Only addresses in my domains". The From address is on `ranidevi.edu.np`.
+    - *Authentication:* check "Require SMTP Authentication". Google's help page says this option checks "the user Google Workspace email address and password". The page does not say App Passwords are accepted here. This is the one step that must be proven by a test send.
+    - *Encryption:* check "Require TLS encryption". The code also refuses to send without STARTTLS on port 587.
+  - **Test before go-live.** Send a test from the admin messaging page or `POST /api/messages/test` with `{ "channel": "email", "recipient": "<an address you own>" }`. Status `sent` means the relay accepted the message. `failed` with "SMTP login rejected" means the App Password was not accepted. The fallback is "Only accept mail from the specified IP addresses" with the server's static outbound IP. Then leave `SMTP_USER` and `SMTP_PASS` unset.
+  - **Source.** Google Workspace Help, "Route outgoing SMTP relay messages through Google" (support.google.com/a/answer/2956491, now hosted at knowledge.workspace.google.com). Read on 2026-10-12. This replaces the earlier third-party guides as the basis for these steps.
+  - **Not verified here:** a real relay exchange, and whether the App Password is accepted by the relay. The tests run against a local SMTP server.
 - **Unhandled API errors.** The ops summary counts Khalti lookups that failed (each is an audit row, `lookup_unavailable`). Other errors are not counted.
 - **Amounts in every report** use NPR with Nepali grouping, for example `NPR 1,00,000.00` (`services/fees/money.js`).
 - **Not built:** a settlement file import (Khalti's settlement format is not known), and a bank statement feed. The settlement check runs only when a settlement list is supplied, and the report says so when it is skipped.
@@ -217,24 +224,32 @@ SMTP_PASS=<app password>                        # only if SMTP AUTH is used
 
 | Check | Result |
 |---|---|
-| `server/test/fees-controls.test.js` | **15 of 15 pass.** Also covers staff numbers (set by admin only, unique, uppercase, students refused), the Finance Officer (verifies, cannot record, cannot see a receipt as a clerk), the receipt's processed-by and verified-by, and the guardian in-app notice (listed, marked seen once, no link, staff refused). Earlier: **12 of 12 pass.** Cash and bank waiting for verification, the counter person cannot finalize, overpayment to credit and application to the next invoice, explicit refund rules, automatic refunds (closed account and 90 days), job window, once per date, tiered escalation (low, medium, high, overpayment), 48-hour step-up, resolution with a note. |
+| `server/test/fees-controls.test.js` | **18 of 18 pass.** Also covers concession tiers (the Finance Officer approves a standard concession, the Finance Manager alone approves a high-value one, the admin is refused, rejection allowed, the audit entry records the tier), and the overpayment email (queued as a mandatory notice, sent despite a guardian opt-out, attendance opt-out still holds, no-address and duplicate cases). Earlier: staff numbers, Finance Officer separation, receipts, guardian in-app notices, and 12 of 12 control tests.
 | `server/test/fees.test.js` | **31 of 31 pass.** Cash and bank now finalize through verification. The concurrency test finalizes 12 cash items at once and checks that receipt numbers have no gaps. |
 | `server/test/fees-policy.test.js` | **5 of 5 pass.** NPR formatting with lakh grouping, tier boundaries and configuration, the overpayment notice wording (NPR, no link in version 1) and its amount check. |
-| Full server suite (`npm test`) | **250 of 250 pass**, exit 0. |
+| Full server suite (`npm test`) | **253 of 253 pass**, exit 0. |
+| Migrations on a copy of the existing dev database | The staff-number columns are added. The outbox table is rebuilt once to accept `fee_notice`, with every row kept and both indexes restored. A second boot is clean. |
 | Migration on an existing database | The new staff-number columns are added to a copy of the dev database with its data intact, and a second boot is clean. |
 | Schema | `schema.sql` executes on a fresh SQLite file: 5 tables, 4 append-only triggers. |
 
 Test note: the overpayment tests write with the real clock, so an earlier overpayment can fall on the same school date as a test run. The escalation test counts those first, so it does not depend on the date.
 
-### 10.5 Decisions still needed from the user
+### 10.5 Decisions
 
-Answered (recorded 2026-10-12): the school domain `ranidevi.edu.np`; the aliases `finance.ops@`, `operations@`, `head.finance@`, and `finance.supervisor@` (for the Finance Supervisor; please confirm, as `finance.lead@` was the alternative and was not chosen); Finance Officer for `fees.verify_payment`; EmpID on each account, printed on receipts and in the audit trail; the overpayment notice in-app and by email, with no refund link in version 1.
+Answered (2026-10-12):
+- **Domain and aliases:** `ranidevi.edu.np`. `finance.ops@`, `operations@`, `head.finance@`, and `finance.supervisor@` for the Finance Supervisor. Please confirm the last one. The aliases must exist as Google Groups before they receive mail.
+- **Finance Officer** holds `fees.verify_payment`. **Lead Cashier** records. **Finance Manager** approves high-value concessions.
+- **EmpID** on each staff account, on receipts, and in the audit trail.
+- **Overpayment notice:** in-app and by email, with no refund link in version 1. Email is mandatory (no opt-out) and goes through the outbox.
+- **SMTP:** App Password, with the verification step in section 2.
+- **Concession tiers:** standard at or below NPR 5,000 is approved by the Finance Officer or system admin. Above NPR 5,000 needs the Finance Manager (10.7).
 
 Still open:
-1. **Google Workspace SMTP credentials.** Choose IP allowlisting in the Admin console, or an app password for SMTP AUTH. Neither is set yet. The aliases must exist as Google Groups on the domain before they receive mail.
-2. **High-value concessions.** Should the Finance Manager be able to approve concessions above a set amount? Concession approval is `admin_only` today. Asked, not answered.
-3. **Overpayment email.** Approve adding an event kind to the outbox so the notice can be sent, with opt-out rules. Until then only the in-app notice works.
-4. **Guardian banner UI.** Build the portal banner and badge on the client. The API is ready.
+1. **System admin and high-value concessions.** The system admin cannot approve a high-value concession, by design. If no Finance Manager exists or is available, those requests wait. Should the admin be a fallback? Decide before pilot.
+2. **Finance Manager daily audit sign-off.** Not built. Say what it signs (the reconciliation summary, or the day's receipts) and whether it is a button or an email reply.
+3. **Counsel.** Confirm that the mandatory notice (no opt-out) is acceptable in each market.
+4. **SMTP test.** Run the test send in section 2 and report the result. If the App Password is rejected, IP allowlisting is the fallback.
+5. **Guardian banner UI.** The client banner and badge are not built. The API is ready.
 
 ### 10.6 New endpoints
 
@@ -246,6 +261,8 @@ Still open:
 | POST `/api/fees/students/:id/credit/refund` | `fees.refund` (admin) | `reason`, `reference` (required), optional `amount_paisa` |
 | POST `/api/fees/invoices/:id/apply-credit` | `fees.collect` | Applies available credit to an existing invoice |
 | GET `/api/fees/reconciliation/exceptions?status=open\|resolved` | `fees.view` | |
+| GET `/api/fees/concessions?status=&tier=standard\|high` | `fees.view` | Each row has `tier`. High means above `FEES_CONCESSION_HIGH_PAISA`. |
+| POST `/api/fees/concessions/:id/decision` | `fees.approve_concession`, plus `fees.approve_concession_high` above the threshold | `approve` or `reject`. The requester cannot approve their own. The system admin cannot approve a high-value one. |
 | GET `/api/fees/receipts/:receiptNo` | `fees.view` | Receipt with `processed_by` and `verified_by` (EmpID / name) |
 | PUT `/api/fees/staff/:id/employee-no` | system admin | Sets a unique staff number on a staff account. `{ employee_no }`, or empty to clear. Audited. |
 | GET `/api/guardian/fees/alerts` | guardian (`can_view_fees`) | Per linked child: credit balance and unseen notices |
@@ -253,3 +270,13 @@ Still open:
 | POST `/api/fees/reconciliation/exceptions/:id/resolve` | `fees.manage` | `note` of 3 to 500 characters. Audited. |
 | POST `/api/fees/jobs/daily/run` | `fees.manage` | Runs the daily job now. Still once per school date. |
 
+### 10.7 Concession approval tiers
+
+- **Threshold.** `FEES_CONCESSION_HIGH_PAISA`, default 500000 paisa (NPR 5,000). It is compared with the concession amount, not the invoice total. At or below the threshold is **standard**. Above it is **high**. Exactly at the threshold is standard.
+- **Standard.** Approved by anyone with `fees.approve_concession`: the Finance Officer, the Finance Manager, or the system admin.
+- **High-value.** Approval needs `fees.approve_concession_high`, which only the Finance Manager holds by default. The system admin is excluded in code, even though the admin passes other permission checks. Anyone with `fees.approve_concession` may **reject** a high-value request.
+- **Maker-checker.** The requester can never approve their own request, at any tier. The check runs before the tier check.
+- **Reading of the rule.** "Processed directly" by the Finance Officer or admin is read as: no Finance Manager step is needed, but the approver must still be a different person from the requester. The user's standing maker-checker rule is kept.
+- **Queue.** `GET /api/fees/concessions?status=requested&tier=high` is the Finance Manager's pending-approval queue.
+- **Audit.** The `concession_approved` entry records the tier.
+- **Open:** see 10.5, item 1.

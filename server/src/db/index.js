@@ -402,3 +402,44 @@ addColumnIfMissing('credit_ledger', 'recorded_by_emp_no', 'TEXT');
 addColumnIfMissing('payment_verifications', 'recorded_by_emp_no', 'TEXT');
 addColumnIfMissing('payment_verifications', 'decided_by_emp_no', 'TEXT');
 addColumnIfMissing('reconciliation_exceptions', 'resolved_by_emp_no', 'TEXT');
+
+// Fee notices (overpayment email) use event_kind 'fee_notice'. Older databases have an outbox CHECK that lists only
+// attendance and notice, so rebuild the table once, copying every row. Same approach as the submissions migration.
+if (!tableSqlHasCheck('message_outbox', "'fee_notice'")) {
+  const migrateOutbox = db.transaction(() => {
+    db.exec(`
+      CREATE TABLE message_outbox_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        channel TEXT NOT NULL CHECK(channel IN ('sms','whatsapp','email')),
+        recipient TEXT,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        student_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        template_id TEXT NOT NULL,
+        subject TEXT,
+        body TEXT NOT NULL,
+        dedupe_key TEXT UNIQUE NOT NULL,
+        event_kind TEXT NOT NULL CHECK(event_kind IN ('attendance','notice','fee_notice')),
+        event_date TEXT,
+        event_status TEXT,
+        status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN
+          ('queued','sending','sent','simulated','failed','skipped_optout','skipped_stale','skipped_no_contact')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at TEXT DEFAULT (datetime('now')),
+        last_error TEXT,
+        provider_message_id TEXT,
+        cost_units INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        sent_at TEXT
+      );
+    `);
+    const cols = db.prepare('PRAGMA table_info(message_outbox)').all().map(c => c.name).join(', ');
+    db.exec(`INSERT INTO message_outbox_new (${cols}) SELECT ${cols} FROM message_outbox;`);
+    db.exec('DROP TABLE message_outbox;');
+    db.exec('ALTER TABLE message_outbox_new RENAME TO message_outbox;');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_outbox_due ON message_outbox(status, next_attempt_at);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_outbox_usage ON message_outbox(channel, status, sent_at);');
+  });
+  migrateOutbox();
+  console.log('Migrated message_outbox to accept fee notices');
+}

@@ -1,3 +1,5 @@
+import { userRoleKey, hasPermission } from '../permissions.js';
+import { queueOverpaymentEmails } from './notifications.js';
 import { formatNPR } from './money.js';
 // Fee ledger: fee structures, invoices, concessions, payments, receipts, refunds, and reports.
 //
@@ -308,6 +310,20 @@ export function invoiceDetail(invoiceId, today = todayNepal()) {
 
 // ---------- concessions ----------
 
+// Concessions above this amount (paisa) need the Finance Manager to approve. Default NPR 5,000. Must be a whole number of paisa.
+export const CONCESSION_HIGH_PAISA = (() => {
+  const raw = process.env.FEES_CONCESSION_HIGH_PAISA;
+  if (raw === undefined || raw === '') return 500000;
+  const n = Number(raw);
+  if (!Number.isSafeInteger(n) || n <= 0) throw new Error('FEES_CONCESSION_HIGH_PAISA must be a positive whole number of paisa');
+  return n;
+})();
+
+/** 'standard' (at or below the threshold) or 'high' (above it). The threshold is compared with the concession amount. */
+export function concessionTier(amount_paisa) {
+  return Number(amount_paisa) > CONCESSION_HIGH_PAISA ? 'high' : 'standard';
+}
+
 export function requestConcession(input, req) {
   const student = requireStudent(input.student_id);
   const session = requireSession(input.session_id);
@@ -325,15 +341,18 @@ export function requestConcession(input, req) {
   return Number(r.lastInsertRowid);
 }
 
-export function listConcessions({ status, student_id } = {}) {
+export function listConcessions({ status, student_id, tier } = {}) {
   const where = [];
   const params = [];
   if (status) { where.push('c.status = ?'); params.push(status); }
   if (student_id) { where.push('c.student_id = ?'); params.push(Number(student_id)); }
+  if (tier === 'high') { where.push('c.amount_paisa > ?'); params.push(CONCESSION_HIGH_PAISA); }
+  if (tier === 'standard') { where.push('c.amount_paisa <= ?'); params.push(CONCESSION_HIGH_PAISA); }
   return db.prepare(`
     SELECT c.*, u.name AS student_name, fh.code AS fee_head_code FROM concessions c
     JOIN users u ON u.id = c.student_id JOIN fee_heads fh ON fh.id = c.fee_head_id
-    ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY c.id DESC`).all(...params);
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY c.id DESC`).all(...params)
+    .map(c => ({ ...c, tier: concessionTier(c.amount_paisa) }));
 }
 
 /** Approve or reject. The requester cannot approve their own request. Approval updates open invoices for that period. */
@@ -343,6 +362,13 @@ export function decideConcession(id, decision, req) {
   if (!row) throw new FeeError(404, 'Concession not found');
   if (row.status !== 'requested') throw new FeeError(409, `Concession is already ${row.status}`);
   if (row.requested_by === actorId(req)) throw new FeeError(403, 'The person who requested a concession cannot approve it');
+  const tier = concessionTier(row.amount_paisa);
+  // High-value approval follows the permission (fees.approve_concession_high). The system admin is excluded on purpose:
+  // the admin bypasses every permission check, and this one is a second person's decision.
+  const canApproveHigh = userRoleKey(actorId(req)) !== 'system_admin' && hasPermission({ id: actorId(req) }, 'fees.approve_concession_high');
+  if (decision === 'approve' && tier === 'high' && !canApproveHigh) {
+    throw new FeeError(403, `A concession above ${formatNPR(CONCESSION_HIGH_PAISA)} needs the Finance Manager to approve it`);
+  }
   const applied = [];
   writeTx(() => {
     const status = decision === 'approve' ? 'approved' : 'rejected';
@@ -357,7 +383,7 @@ export function decideConcession(id, decision, req) {
     }
   })();
   logAudit(req, { module: 'fees', action: decision === 'approve' ? 'concession_approved' : 'concession_rejected', description: `Concession ${row.id}`,
-    previousValue: { status: row.status }, newValue: { status: decision === 'approve' ? 'approved' : 'rejected', invoices_updated: applied.length } });
+    previousValue: { status: row.status }, newValue: { status: decision === 'approve' ? 'approved' : 'rejected', tier, invoices_updated: applied.length } });
   return { id: row.id, status: decision === 'approve' ? 'approved' : 'rejected', invoices_updated: applied };
 }
 
@@ -400,7 +426,8 @@ export function postPayment(inv, { amount, method, reference = null, recordedBy 
   const excess = amount - balanceBefore;
   if (excess > 0) {
     const c = insCredit.run(inv.student_id, 'credit', excess, inv.id, written.payment_id, reference, 'Overpayment', recordedBy, recordedBy);
-    insNotice.run(inv.student_id, 'overpayment_credit', Number(c.lastInsertRowid), excess);
+    const notice = insNotice.run(inv.student_id, 'overpayment_credit', Number(c.lastInsertRowid), excess);
+    queueOverpaymentEmails({ noticeId: Number(notice.lastInsertRowid), studentId: inv.student_id, amount_paisa: excess });
   }
   return { ...written, credit_added_paisa: Math.max(0, excess) };
 }

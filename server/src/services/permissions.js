@@ -99,3 +99,8 @@ export function requirePermission(permissionKey) {
     next();
   };
 }
+
+/** The RBAC role key of a user (for example 'finance_manager'), or null. For rules that depend on the exact role. */
+export function userRoleKey(userId) {
+  return resolveUserRole(userId)?.role_key || null;
+}

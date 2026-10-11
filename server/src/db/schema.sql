@@ -749,6 +749,7 @@ CREATE TABLE IF NOT EXISTS messaging_config (
 INSERT OR IGNORE INTO messaging_config (id) VALUES (1);
 
 -- One row per message. dedupe_key is unique, so enqueueing the same event twice cannot send twice.
+-- event_kind 'fee_notice' is a mandatory fee notice (see MANDATORY_EVENT_KINDS in outbox.js). Opt-outs do not block it.
 -- Each school has its own database (Phase 7), so there is no school_id column.
 CREATE TABLE IF NOT EXISTS message_outbox (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -760,7 +761,7 @@ CREATE TABLE IF NOT EXISTS message_outbox (
   subject TEXT,
   body TEXT NOT NULL,
   dedupe_key TEXT UNIQUE NOT NULL,
-  event_kind TEXT NOT NULL CHECK(event_kind IN ('attendance','notice')),
+  event_kind TEXT NOT NULL CHECK(event_kind IN ('attendance','notice','fee_notice')),
   event_date TEXT,
   event_status TEXT,
   status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN
