@@ -30,7 +30,7 @@ const { default: db } = await import('../src/db/index.js');
 const { setKhaltiClientForTest, GatewayError } = await import('../src/services/fees/khalti.js');
 const { runDailyFeeJob, dispatchRows, overpaymentsOn } = await import('../src/services/fees/dailyJob.js');
 const { tierFor } = await import('../src/services/fees/money.js');
-const { creditBalance } = await import('../src/services/fees/ledger.js');
+const { creditBalance, processedBy } = await import('../src/services/fees/ledger.js');
 const { formatNPR } = await import('../src/services/fees/money.js');
 
 const PW = 'Ctl-Test-Pass-2026';
@@ -408,3 +408,77 @@ test('an exception is closed by a person with a note; the close is audited and c
   assert.equal(again.status, 409);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE module = 'fees' AND action = 'reconciliation_resolved'").get().n, 1);
 });
+
+// ---------- staff numbers, roles, receipts, guardian notices ----------
+
+test('staff numbers: admin sets them; they are unique and stored uppercase; students cannot have one; clerks cannot set them', async () => {
+  const stu = await call('admin', 'PUT', `/api/fees/staff/${ID.sOld}/employee-no`, { employee_no: 'STU-1' });
+  assert.equal(stu.status, 400, 'students have no staff number');
+  const bad = await call('admin', 'PUT', `/api/fees/staff/${ID.clerk}/employee-no`, { employee_no: 'bad id!' });
+  assert.equal(bad.status, 400);
+  const ok = await call('admin', 'PUT', `/api/fees/staff/${ID.clerk}/employee-no`, { employee_no: 'csh-002' });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal(ok.body.employee_no, 'CSH-002');
+  addUser('officer', { role: 'teacher', roleKey: 'finance_officer' });
+  await login('officer');
+  const dup = await call('admin', 'PUT', `/api/fees/staff/${ID.officer}/employee-no`, { employee_no: 'CSH-002' });
+  assert.equal(dup.status, 409, 'a staff number is used once');
+  const fin = await call('admin', 'PUT', `/api/fees/staff/${ID.officer}/employee-no`, { employee_no: 'FIN-014' });
+  assert.equal(fin.status, 200);
+  const clerkTry = await call('clerk', 'PUT', `/api/fees/staff/${ID.officer}/employee-no`, { employee_no: 'X-1' });
+  assert.equal(clerkTry.status, 403, 'only the admin sets staff numbers');
+});
+
+test('the Finance Officer verifies but cannot record; the receipt shows who processed it and who verified it', async () => {
+  const inv = invoiceOf('sOld', 'Term 1');
+  const sub = await call('clerk', 'POST', '/api/fees/payments', { invoice_id: inv, amount_paisa: 3000, method: 'cash' });
+  assert.equal(sub.status, 201, JSON.stringify(sub.body));
+  const officerRecords = await call('officer', 'POST', '/api/fees/payments', { invoice_id: inv, amount_paisa: 100, method: 'cash' });
+  assert.equal(officerRecords.status, 403, 'the officer cannot record money');
+  const queue = await call('officer', 'GET', '/api/fees/verifications?status=pending');
+  assert.equal(queue.status, 200, 'the officer can see the queue');
+  const self = await call('clerk', 'POST', `/api/fees/verifications/${sub.body.verification_id}/decision`, { decision: 'approve' });
+  assert.equal(self.status, 403);
+  const dec = await call('officer', 'POST', `/api/fees/verifications/${sub.body.verification_id}/decision`, { decision: 'approve' });
+  assert.equal(dec.status, 200, JSON.stringify(dec.body));
+
+  const rc = await call('admin', 'GET', `/api/fees/receipts/${dec.body.receipt_no}`);
+  assert.equal(rc.status, 200, JSON.stringify(rc.body));
+  assert.equal(rc.body.processed_by, 'CSH-002 / clerk');
+  assert.equal(rc.body.verified_by, 'FIN-014 / officer');
+  assert.equal(rc.body.amount_paisa, 3000);
+  const detail = await call('admin', 'GET', `/api/fees/invoices/${inv}`);
+  const row = detail.body.payments.find(p => p.id === dec.body.payment_id);
+  assert.equal(row.processed_by, 'CSH-002 / clerk');
+  assert.equal(row.verified_by, 'FIN-014 / officer');
+
+  const v = db.prepare('SELECT recorded_by_emp_no, decided_by_emp_no FROM payment_verifications WHERE id = ?').get(sub.body.verification_id);
+  assert.deepEqual({ ...v }, { recorded_by_emp_no: 'CSH-002', decided_by_emp_no: 'FIN-014' });
+  assert.equal(db.prepare('SELECT recorded_by_emp_no FROM payments WHERE id = ?').get(dec.body.payment_id).recorded_by_emp_no, 'CSH-002');
+  const audit = db.prepare("SELECT employee_no FROM audit_logs WHERE action = 'payment_verified' ORDER BY id DESC LIMIT 1").get();
+  assert.equal(audit.employee_no, 'FIN-014', 'the audit trail carries the verifier staff number');
+  assert.equal((await call('admin', 'GET', '/api/fees/receipts/999999')).status, 404);
+  assert.equal(processedBy(null, 'Ram'), 'Ram (no staff number)', 'an account without a staff number is still named');
+});
+
+test('an overpayment creates an in-app notice for the guardian, which can be marked seen; the invoice shows the credit balance', async () => {
+  const alerts = await call('gOver', 'GET', '/api/guardian/fees/alerts');
+  assert.equal(alerts.status, 200, JSON.stringify(alerts.body));
+  const child = alerts.body.children.find(c => c.student_id === ID.sOver);
+  assert.ok(child, 'the linked child is listed');
+  assert.ok(child.notices.length >= 1, 'the overpayment notice is waiting');
+  const n = child.notices[0];
+  assert.match(n.message, /An overpayment of NPR 400\.00 was credited/);
+  assert.doesNotMatch(n.message, /https?:/, 'version 1 has no link');
+  const seen = await call('gOver', 'POST', `/api/guardian/fees/notices/${n.id}/seen`, {});
+  assert.equal(seen.status, 200);
+  assert.equal(seen.body.changed, true);
+  const again = await call('gOver', 'POST', `/api/guardian/fees/notices/${n.id}/seen`, {});
+  assert.equal(again.body.changed, false, 'marking seen twice changes nothing');
+  const after = await call('gOver', 'GET', '/api/guardian/fees/alerts');
+  assert.equal(after.body.children.find(c => c.student_id === ID.sOver).notices.some(x => x.id === n.id), false);
+  assert.equal((await call('clerk', 'POST', `/api/guardian/fees/notices/${n.id}/seen`, {})).status, 403, 'staff cannot use the guardian route');
+  const det = await call('admin', 'GET', `/api/fees/invoices/${invoiceOf('sOver', 'Term 2')}`);
+  assert.equal(det.body.credit_balance_paisa, 0, 'the credit was applied to Term 2');
+});
+

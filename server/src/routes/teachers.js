@@ -14,7 +14,7 @@ const router = Router();
 // teachers. Subject Teacher should NOT manage other teachers." No requireStaff
 // anywhere below — every route uses requireAdmin.
 
-const STAFF_ROLES = ['class_teacher', 'subject_teacher', 'coordinator', 'exam_controller', 'academic_head'];
+const STAFF_ROLES = ['class_teacher', 'subject_teacher', 'coordinator', 'exam_controller', 'academic_head', 'finance_officer', 'lead_cashier'];
 
 // Maps the legacy staff_role text value to the RBAC engine's roles.key, so
 // setting a teacher's staff_role here (the existing Teacher Management UI)
@@ -28,6 +28,8 @@ const STAFF_ROLE_TO_ROLE_KEY = {
   coordinator: 'coordinator',
   exam_controller: 'exam_coordinator',
   academic_head: 'academic_head',
+  finance_officer: 'finance_officer',
+  lead_cashier: 'lead_cashier',
 };
 
 function syncRoleId(userId, staffRole) {
@@ -37,6 +39,8 @@ function syncRoleId(userId, staffRole) {
   invalidateUserRoleCache(userId);
 }
 const STAFF_ROLE_LABELS = {
+  finance_officer: 'Finance Officer',
+  lead_cashier: 'Lead Cashier',
   class_teacher: 'Class Teacher',
   subject_teacher: 'Subject Teacher',
   coordinator: 'Coordinator',
@@ -64,6 +68,7 @@ function loadAssignments(teacherId) {
 function serializeTeacher(t) {
   return {
     id: t.id, name: t.name, email: t.email, staff_role: t.staff_role,
+    employee_no: t.employee_no || null,
     staff_role_label: STAFF_ROLE_LABELS[t.staff_role] || null,
     account_status: t.account_status || 'active',
     avatar_color: t.avatar_color, created_at: t.created_at,

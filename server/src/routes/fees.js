@@ -4,7 +4,7 @@
 //   /api/guardian/fees/*   guardian portal. Requires can_view_fees or can_pay_fees on the child.
 // Every money action is audited in services/fees/ledger.js or online.js.
 import { Router } from 'express';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { requirePermission, hasPermission } from '../services/permissions.js';
 import { accessibleLink, visibleChildren } from '../services/guardians.js';
 import * as ledger from '../services/fees/ledger.js';
@@ -120,6 +120,18 @@ feesRouter.get('/khalti/return', wrap(async (req, res) => {
   res.set('Cache-Control', 'no-store').json({ outcome: result.outcome, payment_id: result.payment_id, receipt_no: result.receipt_no, credit_added_paisa: result.credit_added_paisa });
 }));
 
+// Receipt view. "Processed by" shows the staff number and name of the person who recorded the money, and "verified by" the second person.
+feesRouter.get('/receipts/:receiptNo', requireAuth, requirePermission('fees.view'), wrap((req, res) => {
+  const receipt = ledger.receiptView(Number(req.params.receiptNo));
+  if (!receipt) throw new FeeError(404, 'Receipt not found');
+  res.json(receipt);
+}));
+
+// Staff numbers (EmpID). Admin only. Staff accounts only.
+feesRouter.put('/staff/:id/employee-no', requireAuth, requireAdmin, wrap((req, res) => {
+  res.json(ledger.setEmployeeNo(idParam(req), req.body?.employee_no, req));
+}));
+
 // Cash and bank payments waiting for a second person (fees.verify_payment). The recorder cannot verify their own.
 feesRouter.get('/verifications', requireAuth, requirePermission('fees.view'), wrap((req, res) => {
   res.json({ verifications: ledger.listVerifications(req.query) });
@@ -154,8 +166,8 @@ feesRouter.post('/reconciliation/exceptions/:id/resolve', requireAuth, requirePe
   const row = db.prepare('SELECT * FROM reconciliation_exceptions WHERE id = ?').get(idParam(req));
   if (!row) throw new FeeError(404, 'Exception not found');
   if (row.status !== 'open') throw new FeeError(409, 'Exception is already resolved');
-  db.prepare("UPDATE reconciliation_exceptions SET status = 'resolved', resolved_by = ?, resolved_at = datetime('now'), resolution_note = ? WHERE id = ?")
-    .run(req.user.id, note, row.id);
+  db.prepare("UPDATE reconciliation_exceptions SET status = 'resolved', resolved_by = ?, resolved_by_emp_no = (SELECT employee_no FROM users WHERE id = ?), resolved_at = datetime('now'), resolution_note = ? WHERE id = ?")
+    .run(req.user.id, req.user.id, note, row.id);
   logAudit(req, { module: 'fees', action: 'reconciliation_resolved', description: `Exception ${row.id} resolved`, newValue: { type: row.type, note } });
   res.json({ id: row.id, status: 'resolved' });
 }));
@@ -166,6 +178,25 @@ feesRouter.post('/jobs/daily/run', requireAuth, requirePermission('fees.manage')
 }));
 
 // ---------- guardian portal ----------
+
+// Overpayment notices and credit balance for each child the guardian may see (version 1: in-app, with the email notice).
+feesPortalRouter.get('/fees/alerts', requireAuth, requireGuardian, wrap((req, res) => {
+  const children = visibleChildren(req.user.id).filter(c => accessibleLink(req.user.id, c.student_id, 'can_view_fees'));
+  res.json({
+    children: children.map(c => ({
+      student_id: c.student_id,
+      name: db.prepare('SELECT name FROM users WHERE id = ?').get(c.student_id)?.name || null,
+      credit_balance_paisa: ledger.creditBalance(c.student_id),
+      notices: ledger.unseenNotices(c.student_id),
+    })),
+  });
+}));
+
+feesPortalRouter.post('/fees/notices/:id/seen', requireAuth, requireGuardian, wrap((req, res) => {
+  const n = db.prepare('SELECT * FROM fee_notices WHERE id = ?').get(idParam(req));
+  if (!n || !accessibleLink(req.user.id, n.student_id, 'can_view_fees')) throw new FeeError(404, 'Notice not found');
+  res.json(ledger.markNoticeSeen(n.id, req.user));
+}));
 
 feesPortalRouter.get('/fees/invoices', requireAuth, requireGuardian, wrap((req, res) => {
   const children = visibleChildren(req.user.id).filter(c => accessibleLink(req.user.id, c.student_id, 'can_view_fees'));

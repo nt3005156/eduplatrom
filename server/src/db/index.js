@@ -391,3 +391,14 @@ export { isNew };
 
 // Phase 1: student photo (a file under /uploads). Access is decided in services/fileAccess.js.
 addColumnIfMissing('users', 'photo_path', 'TEXT');
+
+// Staff numbers (EmpID) and the snapshot columns that carry them onto money and audit records.
+// Added at the end, after the table rebuilds above, so a rebuild cannot drop them.
+addColumnIfMissing('users', 'employee_no', 'TEXT');
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_employee_no_unique ON users(employee_no) WHERE employee_no IS NOT NULL');
+addColumnIfMissing('audit_logs', 'employee_no', 'TEXT');
+addColumnIfMissing('payments', 'recorded_by_emp_no', 'TEXT');
+addColumnIfMissing('credit_ledger', 'recorded_by_emp_no', 'TEXT');
+addColumnIfMissing('payment_verifications', 'recorded_by_emp_no', 'TEXT');
+addColumnIfMissing('payment_verifications', 'decided_by_emp_no', 'TEXT');
+addColumnIfMissing('reconciliation_exceptions', 'resolved_by_emp_no', 'TEXT');

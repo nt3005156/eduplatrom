@@ -1,8 +1,8 @@
 import db from '../db/index.js';
 
 const insertAudit = db.prepare(`
-  INSERT INTO audit_logs (user_id, user_name, user_role, module, action, description, ip_address, user_agent, status, previous_value, new_value, metadata)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  INSERT INTO audit_logs (user_id, user_name, user_role, module, action, description, ip_address, user_agent, status, previous_value, new_value, metadata, employee_no)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT employee_no FROM users WHERE id = ?))
 `);
 
 function safeStringify(value) {
@@ -52,7 +52,8 @@ export function logAudit(req, { module, action, description = '', status = null,
     finalStatus,
     safeStringify(previousValue),
     safeStringify(newValue),
-    safeStringify(metadata)
+    safeStringify(metadata),
+    actor?.id || null
   );
 }
 

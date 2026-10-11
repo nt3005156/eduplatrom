@@ -34,18 +34,20 @@ test('tiers can be configured, and a bad configuration is refused', () => {
   assert.throws(() => escalationTiers({ FEES_TIER_SUPERVISOR_PAISA: '-5' }), /positive whole number/);
 });
 
-test('the overpayment notice uses the agreed wording, in NPR', () => {
-  const n = overpaymentNotice({ parentName: 'Sita Sharma', amount_paisa: 250000, refundUrl: 'https://school.example.test/refund/abc' });
+test('the overpayment notice (version 1) states the amount in NPR and points to the accounts desk, with no link', () => {
+  const n = overpaymentNotice({ parentName: 'Sita Sharma', amount_paisa: 250000 });
   assert.equal(n.subject, 'Overpayment credited to your account');
   assert.match(n.body, /^Dear Sita Sharma,/);
-  assert.match(n.body, /An overpayment of NPR 2,500\.00 was detected and credited to your account\. Click here if you prefer a direct refund to your original payment method: https:\/\/school\.example\.test\/refund\/abc/);
+  assert.match(n.body, /An overpayment of NPR 2,500\.00 was detected and credited to your account\./);
+  assert.match(n.body, /contact the school accounts desk/);
+  assert.doesNotMatch(n.body, /https?:\/\//, 'no refund link in version 1');
+  assert.doesNotMatch(n.body, /Click here/i, 'the link wording is deferred to version 2');
   assert.doesNotMatch(n.body, /\$/, 'no dollar sign');
+  const generic = overpaymentNotice({ amount_paisa: 100 });
+  assert.match(generic.body, /^Dear parent or guardian,/);
 });
 
-test('the overpayment notice will not render without an https refund link, or with a bad amount', () => {
-  assert.throws(() => overpaymentNotice({ amount_paisa: 100 }), /refundUrl/);
-  assert.throws(() => overpaymentNotice({ amount_paisa: 100, refundUrl: 'http://insecure.example.test/x' }), /refundUrl/);
-  assert.throws(() => overpaymentNotice({ amount_paisa: 0, refundUrl: 'https://school.example.test/x' }), TypeError);
-  const generic = overpaymentNotice({ amount_paisa: 100, refundUrl: 'https://school.example.test/x' });
-  assert.match(generic.body, /^Dear parent or guardian,/);
+test('the overpayment notice refuses a zero or fractional amount', () => {
+  assert.throws(() => overpaymentNotice({ amount_paisa: 0 }), TypeError);
+  assert.throws(() => overpaymentNotice({ amount_paisa: 100.5 }), TypeError);
 });

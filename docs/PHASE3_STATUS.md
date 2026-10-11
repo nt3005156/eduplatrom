@@ -2,7 +2,7 @@
 
 Date: 2026-10-11. Roadmap section: [PRODUCTION_ROADMAP.md, Phase 3](PRODUCTION_ROADMAP.md#phase-3-fees-invoices-receipts-and-online-payment).
 
-**Status: backend complete in code and tested. Server suite 247 of 247 (Phase 3 tests across three files). The phase exit gate is not met.** The three controls decided on 2026-10-11 are built (section 10). The gate needs a live Khalti merchant account (sandbox end to end), a month of real fee data reconciled to the penny at a pilot school, and a first paying school. None of these can be done from this environment. The parent-facing payment screen, the admin fee screens, and the receipt PDF are not built.
+**Status: backend complete in code and tested. Server suite 250 of 250 (Phase 3 tests across three files). The phase exit gate is not met.** The three controls decided on 2026-10-11 are built (section 10). The gate needs a live Khalti merchant account (sandbox end to end), a month of real fee data reconciled to the penny at a pilot school, and a first paying school. None of these can be done from this environment. The parent-facing payment screen, the admin fee screens, and the receipt PDF are not built.
 
 Khalti is the only gateway. It stays in `none` mode (no network calls, online payment refused with 503) until `KHALTI_SECRET_KEY` is set. eSewa is deferred, as decided.
 
@@ -12,7 +12,7 @@ Khalti is the only gateway. It stays in `none` mode (no network calls, online pa
 
 | Area | File | What it does |
 |---|---|---|
-| Permissions | `server/src/db/seedRbac.js` | `fees.view`, `fees.collect`, `fees.manage` (staff roles, per matrix). `fees.approve_concession` and `fees.refund` are `admin_only`, hard-locked to the system admin in `hasPermission`. Academic head gets `fees.view` by default. |
+| Permissions | `server/src/db/seedRbac.js` | `fees.view`, `fees.collect`, `fees.manage` (staff roles, per matrix). New roles: `finance_officer` (view and verify, no collect) and `lead_cashier` (view and collect, no verify). `fees.approve_concession` and `fees.refund` are `admin_only`, hard-locked to the system admin in `hasPermission`. Academic head gets `fees.view` by default. |
 | Schema | `server/src/db/schema.sql` | `fee_heads`, `fee_structures`, `invoices`, `invoice_items`, `concessions`, `payments` (append-only, triggers block UPDATE and DELETE), `receipts` (unique `receipt_no`), `gateway_transactions` (unique `pidx`, unique `provider_transaction_id`, unique `purchase_order_id`). |
 | Ledger | `server/src/services/fees/ledger.js` | Fee heads and structures, invoice generation, concession rules, cash and bank payments, refunds, dues report, collection report, reconciliation. |
 | Khalti client | `server/src/services/fees/khalti.js` | The only module that calls Khalti. Config from env. Fake client injectable for tests. |
@@ -155,8 +155,12 @@ The user answered four questions: overpayments (credit, with a refund on request
   2. The credit has not moved for 90 days (`FEES_CREDIT_AUTO_REFUND_DAYS`, default 90). "Moved" means any credit or application row. The clock restarts when credit is applied, so a partial application keeps the rest of the credit alive.
   An automatic refund carries no bank reference. Finance must record the payout reference before the money leaves. The job's finance report lists these refunds.
 - **Settlement rule.** An invoice's settled amount is its payments, minus the part of a payment that became credit, minus the credit applied to it. Payments and credit are never counted twice. A test caught an earlier version that did count them twice.
-- **Notice wording and currency (confirmed by the user: NPR).** The template is in `services/fees/notices.js`: "An overpayment of NPR 2,500.00 was detected and credited to your account. Click here if you prefer a direct refund to your original payment method: <link>". It refuses to render without an `https` refund link.
-- **Not built:** sending it. Parent email goes through the Phase 2 outbox, which accepts only attendance and notice events, so it needs a new event kind and opt-out rules. The refund-preference page behind the link is also not built.
+- **Notice wording and currency (NPR, confirmed by the user).** Version 1 has **no refund link**. Its wording: "An overpayment of NPR 2,500.00 was detected and credited to your account." It goes on to say the credit is applied to the next fee invoice, and that a direct bank refund or physical refund is handled by contacting the school accounts desk. The template is `overpaymentNotice` in `services/fees/notices.js`. The refund link is planned for version 2.
+- **Channels (the user's answer).** Two channels:
+  - **In-app notice (built, API only).** Each overpayment writes a row to `fee_notices`. `GET /api/guardian/fees/alerts` lists, for each linked child, the credit balance and the unseen notices, with the message text. `POST /api/guardian/fees/notices/:id/seen` marks a notice seen. The guardian portal banner or badge on login is **not built** (no client page yet).
+  - **Email (template built, sending not wired).** The template is ready. Sending it through the Phase 2 outbox is blocked: the outbox accepts only attendance and notice events, so it needs a new event kind and opt-out rules. Until that is wired, no parent email goes out.
+- **Credit is shown** on each invoice (`credit_balance_paisa` in the invoice detail) and on the guardian alerts.
+- **Not built:** the refund-preference page and the link in the email (version 2).
 
 ### 10.2 Dual control: cash and bank payments need a second person
 
@@ -165,8 +169,9 @@ The user answered four questions: overpayments (credit, with a refund on request
 - **The counter person cannot finalize their own item** (403). Both user IDs and names are kept on the row, and the audit entry `payment_verified` records `recorded_by` and `verified_by`.
 - **Bank references are unique.** The same slip cannot be recorded twice. Cash has no reference, so duplicate cash entries are caught by the second person, not by the system.
 - **Automated bank feeds and gateway payments are exempt**, as the user answered. Khalti payments post only after the server-side lookup (section 3).
-- **Who holds `fees.verify_payment`.** Not granted by default. The user's suggested roles are a lead cashier, a finance officer, or the finance manager. Grant it in the permissions matrix. The system admin has it, as before.
-- **Staff ID.** The users table has no staff or employee number. The trail uses each login account (ID, name, role). Add a staff number field if the school wants its own ID on receipts. This is an open decision (10.5).
+- **Who holds `fees.verify_payment`.** Granted by default to the **Finance Officer** role (`finance_officer`) only. Verification is kept apart from recording: the **Lead Cashier** (`lead_cashier`) records cash and bank money, and the Finance Officer verifies it. The Finance Officer has no `fees.collect`. The Finance Manager keeps secondary approval of high-value concessions and the daily audit sign-off (concession approval is still `admin_only`; see 10.5). The system admin keeps all fee permissions, as before.
+- **Staff numbers (EmpID), built.** Each staff account can have a unique staff number (`users.employee_no`, 1 to 20 letters, digits, or hyphens, stored uppercase). Only the system admin sets it: `PUT /api/fees/staff/:id/employee-no`. Students and guardians cannot have one. The number is **snapshotted** when a row is written: on payments, credit rows, verification rows (recorder and decider), reconciliation resolutions, and the audit log. A later change does not rewrite older rows, so an old receipt keeps the number it was printed with. An account without a number prints as `Name (no staff number)`.
+- **Receipts show who processed them.** `GET /api/fees/receipts/:receiptNo` (`fees.view`) returns the receipt with `processed_by` (`EMP-014 / Name`) and `verified_by`. The printed "Processed by:" line on a PDF is **not built** (no receipt PDF yet).
 - **Not built:** a printed draft receipt. The `DRAFT-n` number is shown in the API response only.
 
 ### 10.3 Daily reconciliation, tiered escalation, and dispatch
@@ -195,7 +200,7 @@ The user answered four questions: overpayments (credit, with a refund on request
 MESSAGING_EMAIL_PROVIDER=smtp
 SMTP_HOST=smtp-relay.gmail.com
 SMTP_PORT=587
-SMTP_FROM=NITEX Fees <fees@<school-domain>>     # must be an address in a domain the relay allows
+SMTP_FROM=notifications@ranidevi.edu.np          # the school's domain; must be allowed by the relay
 SMTP_USER=<sending account>                     # only if SMTP AUTH is used
 SMTP_PASS=<app password>                        # only if SMTP AUTH is used
 ```
@@ -212,21 +217,24 @@ SMTP_PASS=<app password>                        # only if SMTP AUTH is used
 
 | Check | Result |
 |---|---|
-| `server/test/fees-controls.test.js` | **12 of 12 pass.** Cash and bank waiting for verification, the counter person cannot finalize, overpayment to credit and application to the next invoice, explicit refund rules, automatic refunds (closed account and 90 days), job window, once per date, tiered escalation (low, medium, high, overpayment), 48-hour step-up, resolution with a note. |
+| `server/test/fees-controls.test.js` | **15 of 15 pass.** Also covers staff numbers (set by admin only, unique, uppercase, students refused), the Finance Officer (verifies, cannot record, cannot see a receipt as a clerk), the receipt's processed-by and verified-by, and the guardian in-app notice (listed, marked seen once, no link, staff refused). Earlier: **12 of 12 pass.** Cash and bank waiting for verification, the counter person cannot finalize, overpayment to credit and application to the next invoice, explicit refund rules, automatic refunds (closed account and 90 days), job window, once per date, tiered escalation (low, medium, high, overpayment), 48-hour step-up, resolution with a note. |
 | `server/test/fees.test.js` | **31 of 31 pass.** Cash and bank now finalize through verification. The concurrency test finalizes 12 cash items at once and checks that receipt numbers have no gaps. |
-| `server/test/fees-policy.test.js` | **5 of 5 pass.** NPR formatting with lakh grouping, tier boundaries and configuration, the overpayment notice wording and its link check. |
-| Full server suite (`npm test`) | **247 of 247 pass**, exit 0. |
+| `server/test/fees-policy.test.js` | **5 of 5 pass.** NPR formatting with lakh grouping, tier boundaries and configuration, the overpayment notice wording (NPR, no link in version 1) and its amount check. |
+| Full server suite (`npm test`) | **250 of 250 pass**, exit 0. |
+| Migration on an existing database | The new staff-number columns are added to a copy of the dev database with its data intact, and a second boot is clean. |
 | Schema | `schema.sql` executes on a fresh SQLite file: 5 tables, 4 append-only triggers. |
 
 Test note: the overpayment tests write with the real clock, so an earlier overpayment can fall on the same school date as a test run. The escalation test counts those first, so it does not depend on the date.
 
 ### 10.5 Decisions still needed from the user
 
-1. **School domain.** You chose Google Workspace SMTP relay. Send me the school's email domain, so the From address and the relay settings can be set. Nothing is configured yet.
-2. **Email addresses.** Your suggested aliases are `finance.ops@`, `operations@`, and `head.finance@`, on the school domain. Please also give an alias for the Finance Supervisor. These go in env (section 2). None is hard-coded.
-3. **Customer overpayment notice.** The wording and currency are set (NPR). Still open: the channel (email, SMS, or portal), whether the refund-preference link is in the first release, and approval to add the event kind to the outbox.
-4. **Staff number.** Do you want a staff or employee number on each account, printed on the receipt and in the audit trail?
-5. **Who holds `fees.verify_payment`.** Confirm the people: the lead cashier, finance officer, and finance manager, or a different set.
+Answered (recorded 2026-10-12): the school domain `ranidevi.edu.np`; the aliases `finance.ops@`, `operations@`, `head.finance@`, and `finance.supervisor@` (for the Finance Supervisor; please confirm, as `finance.lead@` was the alternative and was not chosen); Finance Officer for `fees.verify_payment`; EmpID on each account, printed on receipts and in the audit trail; the overpayment notice in-app and by email, with no refund link in version 1.
+
+Still open:
+1. **Google Workspace SMTP credentials.** Choose IP allowlisting in the Admin console, or an app password for SMTP AUTH. Neither is set yet. The aliases must exist as Google Groups on the domain before they receive mail.
+2. **High-value concessions.** Should the Finance Manager be able to approve concessions above a set amount? Concession approval is `admin_only` today. Asked, not answered.
+3. **Overpayment email.** Approve adding an event kind to the outbox so the notice can be sent, with opt-out rules. Until then only the in-app notice works.
+4. **Guardian banner UI.** Build the portal banner and badge on the client. The API is ready.
 
 ### 10.6 New endpoints
 
@@ -238,6 +246,10 @@ Test note: the overpayment tests write with the real clock, so an earlier overpa
 | POST `/api/fees/students/:id/credit/refund` | `fees.refund` (admin) | `reason`, `reference` (required), optional `amount_paisa` |
 | POST `/api/fees/invoices/:id/apply-credit` | `fees.collect` | Applies available credit to an existing invoice |
 | GET `/api/fees/reconciliation/exceptions?status=open\|resolved` | `fees.view` | |
+| GET `/api/fees/receipts/:receiptNo` | `fees.view` | Receipt with `processed_by` and `verified_by` (EmpID / name) |
+| PUT `/api/fees/staff/:id/employee-no` | system admin | Sets a unique staff number on a staff account. `{ employee_no }`, or empty to clear. Audited. |
+| GET `/api/guardian/fees/alerts` | guardian (`can_view_fees`) | Per linked child: credit balance and unseen notices |
+| POST `/api/guardian/fees/notices/:id/seen` | guardian (`can_view_fees`) | Marks a notice seen. Idempotent. |
 | POST `/api/fees/reconciliation/exceptions/:id/resolve` | `fees.manage` | `note` of 3 to 500 characters. Audited. |
 | POST `/api/fees/jobs/daily/run` | `fees.manage` | Runs the daily job now. Still once per school date. |
 

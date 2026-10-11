@@ -1004,3 +1004,15 @@ CREATE TABLE IF NOT EXISTS fee_dispatches (
   error TEXT,
   created_at TEXT DEFAULT (datetime('now'))
 );
+
+-- In-app notices for parents and guardians (version 1 of the overpayment notice). A row is created with each overpayment credit.
+CREATE TABLE IF NOT EXISTS fee_notices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  student_id INTEGER NOT NULL REFERENCES users(id),
+  kind TEXT NOT NULL CHECK(kind IN ('overpayment_credit')),
+  credit_ledger_id INTEGER NOT NULL UNIQUE REFERENCES credit_ledger(id),
+  amount_paisa INTEGER NOT NULL CHECK(amount_paisa > 0),
+  created_at TEXT DEFAULT (datetime('now')),
+  seen_at TEXT,
+  seen_by INTEGER REFERENCES users(id)
+);
