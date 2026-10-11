@@ -21,6 +21,7 @@ process.env.FEES_FINANCE_EMAILS = 'finance@school.test';
 process.env.FEES_OPS_EMAILS = 'ops@school.test';
 delete process.env.FEES_HEAD_FINANCE_EMAILS;
 process.env.FEES_SUPERVISOR_EMAILS = 'supervisor@school.test';
+process.env.FEES_SIGNOFF_EMAILS = 'finance.ops@school.test,head.finance@school.test';
 delete process.env.FEES_TIER_SUPERVISOR_PAISA; // defaults: NPR 10,000 and NPR 50,000
 delete process.env.FEES_TIER_HEAD_PAISA;
 delete process.env.MESSAGING_EMAIL_PROVIDER;
@@ -640,6 +641,16 @@ test('daily fee audit: the job creates the sign-off; the Finance Manager signs o
   const so = db.prepare("SELECT * FROM fee_daily_signoffs WHERE reconciled_date = '2027-01-14'").get();
   assert.ok(so, 'a sign-off row exists for the reconciled day');
   assert.equal(so.status, 'pending');
+
+  // The digest goes to the two configured addresses, carries the totals, and links to the sign-off screen.
+  const digest = dispatchRows('2027-01-15').filter(d => d.audience === 'signoff');
+  assert.deepEqual(digest.map(d => d.recipient).sort(), ['finance.ops@school.test', 'head.finance@school.test']);
+  assert.ok(digest.every(d => d.status === 'simulated'), 'log mode: recorded as simulated, not sent');
+  const digestBody = db.prepare("SELECT body FROM fee_dispatches WHERE run_date = '2027-01-15' AND audience = 'signoff' LIMIT 1").get().body;
+  assert.match(digestBody, /Total collected: NPR /);
+  assert.match(digestBody, /Concessions approved that day: NPR /);
+  assert.match(digestBody, /Mismatched transactions: \d+/);
+  assert.ok(digestBody.includes('https://school.example.test/admin/fee-signoff?date=2027-01-14'), 'deep link to the sign-off screen');
 
   const list = await call('officer', 'GET', '/api/fees/signoffs?status=pending');
   assert.equal(list.status, 200, 'the Finance Officer can see the sign-off list');

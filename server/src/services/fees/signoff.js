@@ -20,6 +20,16 @@ export function createDailySignoff(row) {
     row.open_exceptions, row.pending_verifications, row.overpayments, row.automatic_refunds, JSON.stringify(row.summary || {}));
 }
 
+/**
+ * Link to the sign-off screen for one reconciled date, for the digest email. Null when PUBLIC_BASE_URL is not a
+ * public https address (or localhost), so the email never carries a broken or insecure link.
+ */
+export function signoffLink(day) {
+  const base = (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
+  if (!base.startsWith('https://') && !base.startsWith('http://localhost') && !base.startsWith('http://127.0.0.1')) return null;
+  return `${base}/admin/fee-signoff?date=${encodeURIComponent(day)}`;
+}
+
 export function listSignoffs({ status } = {}) {
   const rows = status
     ? db.prepare('SELECT * FROM fee_daily_signoffs WHERE status = ? ORDER BY reconciled_date DESC').all(status)

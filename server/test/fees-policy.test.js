@@ -43,6 +43,8 @@ test('the overpayment notice (version 1) states the amount in NPR and points to 
   assert.doesNotMatch(n.body, /https?:\/\//, 'no refund link in version 1');
   assert.doesNotMatch(n.body, /Click here/i, 'the link wording is deferred to version 2');
   assert.doesNotMatch(n.body, /\$/, 'no dollar sign');
+  assert.match(n.body, /This is an automated billing and financial balance notification regarding your institutional account\./, 'transactional footer');
+  assert.doesNotMatch(n.body, /unsubscribe/i, 'no unsubscribe link on a mandatory billing notice');
   const generic = overpaymentNotice({ amount_paisa: 100 });
   assert.match(generic.body, /^Dear parent or guardian,/);
 });

@@ -20,7 +20,7 @@
 import db from '../../db/index.js';
 import { logAudit } from '../../utils/audit.js';
 import { reconcile, todayNepal, autoRefundCredits } from './ledger.js';
-import { createDailySignoff, pendingVerificationCount } from './signoff.js';
+import { createDailySignoff, pendingVerificationCount, signoffLink } from './signoff.js';
 import { escalationTiers, tierFor, formatNPR } from './money.js';
 import { send, ProviderError } from '../messaging/providers.js';
 
@@ -51,7 +51,10 @@ function recipientsFrom(envName) {
 const insDispatch = db.prepare('INSERT INTO fee_dispatches (run_date, audience, recipient, subject, body, status, error) VALUES (?,?,?,?,?,?,?)');
 
 async function dispatch(runDate, audience, envName, subject, body) {
-  const list = recipientsFrom(envName);
+  return dispatchTo(runDate, audience, recipientsFrom(envName), envName, subject, body);
+}
+
+async function dispatchTo(runDate, audience, list, envName, subject, body) {
   const counts = { sent: 0, simulated: 0, held: 0, failed: 0 };
   if (list.length === 0) {
     insDispatch.run(runDate, audience, null, subject, body, 'held', `no recipients configured (${envName})`);
@@ -121,6 +124,12 @@ function exceptionsToEscalate(today, tiers) {
 
 const markEscalated = db.prepare("UPDATE reconciliation_exceptions SET escalated_at = datetime('now'), escalation_level = ? WHERE id = ?");
 
+/** Concessions approved on one school date (Asia/Kathmandu). */
+export function concessionsApprovedOn(day) {
+  return db.prepare(`SELECT COUNT(*) AS count, COALESCE(SUM(amount_paisa), 0) AS paisa FROM concessions
+    WHERE status = 'approved' AND date(decided_at, '+5 hours', '+45 minutes') = ?`).get(day);
+}
+
 /** Overpayments (credit created by an excess payment) on one school date. */
 export function overpaymentsOn(day) {
   return db.prepare(`SELECT c.id, c.student_id, c.amount_paisa, u.name AS student_name, i.invoice_no
@@ -167,6 +176,7 @@ export async function runDailyFeeJob({ now = new Date(), force = false } = {}) {
     const dueEx = exceptionsToEscalate(today, tiers);
     const overpayments = overpaymentsOn(yesterday).map(o => ({ ...o, tier: tierFor(o.amount_paisa, tiers) }));
     const failures = lookupFailuresOn(yesterday);
+    const conc = concessionsApprovedOn(yesterday);
 
     // Who gets each escalation. Exceptions and overpayments are grouped by the level they now belong to.
     const level = { supervisor: [], head_of_finance: [] };
@@ -183,6 +193,7 @@ export async function runDailyFeeJob({ now = new Date(), force = false } = {}) {
       escalated_supervisor: level.supervisor.length, escalated_head_of_finance: level.head_of_finance.length,
       overpayments: overpayments.length, overpayments_escalated: overpaymentLevel.supervisor.length + overpaymentLevel.head_of_finance.length,
       provider_lookup_failures: failures, automatic_refunds: refunds.length,
+      concessions_approved: conc.count, concessions_approved_paisa: conc.paisa,
       settlement_checked: rec.settlement_checked,
     };
 
@@ -217,9 +228,27 @@ export async function runDailyFeeJob({ now = new Date(), force = false } = {}) {
       `Automatic credit refunds: ${refunds.length}.`,
     ].join('\n');
 
+    // Sign-off digest: totals and a link to the sign-off screen. Sent to FEES_SIGNOFF_EMAILS (Finance and Head of Finance).
+    // The sign-off itself happens in the app; the email is an alert and a summary.
+    const link = signoffLink(yesterday);
+    const digestBody = [
+      `The fee audit for ${yesterday} is ready for sign-off. All amounts are in NPR.`,
+      '',
+      `Total collected: ${formatNPR(rec.totals.payments_paisa)} (${rec.totals.payment_count} payment(s)).`,
+      `Refunds: ${formatNPR(-rec.totals.refunds_paisa)}.`,
+      `Concessions approved that day: ${formatNPR(conc.paisa)} (${conc.count}).`,
+      `Mismatched transactions: ${rec.mismatches.length}. Open exceptions (all dates): ${open.length}.`,
+      `Payments awaiting verification: ${pendingVerificationCount()}.`,
+      `Overpayments: ${overpayments.length}. Automatic credit refunds: ${refunds.length}.`,
+      '',
+      link ? `Review and sign off: ${link}` : 'Review and sign off: open Fee Sign-off in NITEX. (No link is included because PUBLIC_BASE_URL is not set to a public https address.)',
+    ].join('\n');
+
     const results = {
       finance: await dispatch(today, 'finance', 'FEES_FINANCE_EMAILS', `NITEX fees: reconciliation for ${yesterday} (${open.length} open)`, financeBody),
       ops: await dispatch(today, 'ops', 'FEES_OPS_EMAILS', `NITEX fees: daily summary ${today}`, opsBody),
+      signoff: await dispatchTo(today, 'signoff', recipientsFrom('FEES_SIGNOFF_EMAILS'), 'FEES_SIGNOFF_EMAILS',
+        `NITEX fees: sign-off needed for ${yesterday}`, digestBody),
     };
 
     for (const lvl of ['supervisor', 'head_of_finance']) {

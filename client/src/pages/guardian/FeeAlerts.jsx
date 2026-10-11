@@ -1,12 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { BellRing, Check, Wallet } from 'lucide-react';
 import api from '../../api/client.js';
-
-// Amounts arrive as integer paisa. Show NPR with Nepali grouping, for example NPR 1,00,000.00.
-export function formatNPR(paisa) {
-  const rupees = Number(paisa || 0) / 100;
-  return `NPR ${rupees.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
+import { formatNPR } from '../../utils/money.js';
 
 // Shows each child's credit balance and any unread fee notices (for example an overpayment notice).
 // Renders nothing when there is nothing to show, so the dashboard stays unchanged for most families.

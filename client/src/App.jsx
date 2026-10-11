@@ -38,6 +38,7 @@ import GuardianHome from './pages/guardian/GuardianHome.jsx';
 import ChildAttendance from './pages/guardian/ChildAttendance.jsx';
 import GuardianProfile from './pages/guardian/GuardianProfile.jsx';
 import Guardians from './pages/admin/Guardians.jsx';
+import FeeSignoff from './pages/admin/FeeSignoff.jsx';
 import Messages from './pages/admin/Messages.jsx';
 import StudentImport from './pages/admin/StudentImport.jsx';
 
@@ -127,6 +128,7 @@ export default function App() {
             <Route path="/admin/attendance" element={<ProtectedRoute role={['admin', 'teacher']}><RequireAssignment title="Attendance"><AdminAttendance /></RequireAssignment></ProtectedRoute>} />
             <Route path="/admin/announcements" element={<ProtectedRoute role={['admin', 'teacher']}><RequireAssignment title="Announcements"><AdminAnnouncements /></RequireAssignment></ProtectedRoute>} />
             <Route path="/admin/guardians" element={<ProtectedRoute role="admin"><Guardians /></ProtectedRoute>} />
+            <Route path="/admin/fee-signoff" element={<RequirePermissionRoute perm="fees.signoff_daily"><FeeSignoff /></RequirePermissionRoute>} />
             <Route path="/admin/messages" element={<ProtectedRoute role="admin"><Messages /></ProtectedRoute>} />
             <Route path="/admin/student-import" element={<ProtectedRoute role="admin"><StudentImport /></ProtectedRoute>} />
             <Route path="/admin/branding" element={<ProtectedRoute role="admin"><AdminBranding /></ProtectedRoute>} />

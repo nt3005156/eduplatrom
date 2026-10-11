@@ -17,6 +17,8 @@ export function overpaymentNotice({ parentName = null, amount_paisa }) {
       '',
       'Regards,',
       'School Finance Office',
+      '',
+      'This is an automated billing and financial balance notification regarding your institutional account.',
     ].join('\n'),
   };
 }

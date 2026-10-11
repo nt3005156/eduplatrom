@@ -443,6 +443,32 @@ if (!tableSqlHasCheck('message_outbox', "'fee_notice'")) {
   migrateOutbox();
   console.log('Migrated message_outbox to accept fee notices');
 }
+// Daily sign-off digest uses audience 'signoff'. Older databases have a fee_dispatches CHECK without it, so rebuild the
+// table once, copying every row (same approach as the outbox rebuild above).
+if (!tableSqlHasCheck('fee_dispatches', "'signoff'")) {
+  const migrateDispatches = db.transaction(() => {
+    db.exec(`
+      CREATE TABLE fee_dispatches_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_date TEXT NOT NULL,
+        audience TEXT NOT NULL CHECK(audience IN ('finance','ops','supervisor','head_of_finance','signoff')),
+        recipient TEXT,
+        subject TEXT NOT NULL,
+        body TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('sent','simulated','held','failed')),
+        error TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+      );
+    `);
+    const cols = db.prepare('PRAGMA table_info(fee_dispatches)').all().map(c => c.name).join(', ');
+    db.exec(`INSERT INTO fee_dispatches_new (${cols}) SELECT ${cols} FROM fee_dispatches;`);
+    db.exec('DROP TABLE fee_dispatches;');
+    db.exec('ALTER TABLE fee_dispatches_new RENAME TO fee_dispatches;');
+  });
+  migrateDispatches();
+  console.log("Migrated fee_dispatches to accept the sign-off digest");
+}
+
 // Per-row mandatory flag. A mandatory row (a fee notice) skips the opt-out check at send time. Set only by the
 // caller that enqueues it, and only for fee_notice rows (enforced in outbox.enqueue).
 addColumnIfMissing('message_outbox', 'mandatory', 'INTEGER NOT NULL DEFAULT 0');

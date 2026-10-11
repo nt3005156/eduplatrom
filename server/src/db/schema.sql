@@ -999,7 +999,7 @@ CREATE TABLE IF NOT EXISTS reconciliation_exceptions (
 CREATE TABLE IF NOT EXISTS fee_dispatches (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   run_date TEXT NOT NULL,
-  audience TEXT NOT NULL CHECK(audience IN ('finance','ops','supervisor','head_of_finance')),
+  audience TEXT NOT NULL CHECK(audience IN ('finance','ops','supervisor','head_of_finance','signoff')),
   recipient TEXT,
   subject TEXT NOT NULL,
   body TEXT NOT NULL,
