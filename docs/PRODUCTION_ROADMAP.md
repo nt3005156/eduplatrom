@@ -285,6 +285,8 @@ Dependency order: Phase 0 blocks everything. Phase 1 blocks 2, 3, 6. Phase 3 blo
 
 ### Phase 3: Fees, invoices, receipts, and online payment
 
+**Status (2026-10-11): backend complete in code and tested (31 new tests, full server suite 229 of 229). Exit gate not met:** needs a Khalti sandbox merchant account, a month of reconciled pilot data, and a first paying school. The parent payment screen, admin fee screens, dues reminders, and receipt PDF are not built. Details and the list of open items: [PHASE3_STATUS.md](PHASE3_STATUS.md).
+
 **Goal.** Collect school fees through Khalti (the first gateway, chosen by the user; eSewa is deferred as a later premium integration), record every payment, and show dues to parents. This is the feature schools pay for.
 
 **Why.** Fee management is in every platform's core list. In Nepal, vendors describe digital fee payment with eSewa, Khalti, ConnectIPS, and IME Pay as standard ([Nimble](https://nimble.com.np/school-college-software), [WebApp Nepal](https://webappnepal.com/service/payment-gateway)). Fee collection was ranked the top lever in `GO_TO_MARKET_PLAN.md`.

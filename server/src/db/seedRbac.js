@@ -34,6 +34,12 @@ export const ROLES = [
 // that point the permission and its enforcement should ship together in
 // the same change, never a permission-only stub ahead of real functionality.
 export const PERMISSIONS = [
+  // fees (Phase 3). Money actions are audited. Refunds and concession approval are admin-only.
+  { key: 'fees.view', module: 'fees', label: 'View fees and dues', description: 'Invoices, dues report, collection report, reconciliation report.' },
+  { key: 'fees.collect', module: 'fees', label: 'Record cash and bank payments', description: 'Record a cash or bank deposit against an invoice and issue its receipt.' },
+  { key: 'fees.manage', module: 'fees', label: 'Manage fee structures and invoices', description: 'Fee heads, class fee structures, invoice generation, and concession requests.' },
+  { key: 'fees.approve_concession', module: 'fees', label: 'Approve fee concessions', description: 'Approve or reject a concession requested by someone else.', is_dangerous: 1, admin_only: 1 },
+  { key: 'fees.refund', module: 'fees', label: 'Refund payments', description: 'Reverse a payment. Creates an audited negative entry.', is_dangerous: 1, admin_only: 1 },
   // content
   { key: 'content.create', module: 'content', label: 'Create learning content', description: 'Upload notes/videos/PDFs for an assigned subject.' },
   { key: 'content.archive', module: 'content', label: 'Archive content', description: '' },
@@ -106,6 +112,7 @@ export const ROLE_DEFAULTS = {
     'analytics.view_school_wide': 'allow',
   },
   academic_head: {
+    'fees.view': 'allow',
     'content.create': 'allow', 'content.archive': 'allow',
     'assignment.create': 'allow', 'assignment.publish': 'allow', 'assignment.delete': 'allow',
     'quiz.create': 'allow', 'quiz.publish': 'allow', 'quiz.delete': 'allow',

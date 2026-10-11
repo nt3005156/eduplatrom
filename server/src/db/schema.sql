@@ -814,3 +814,115 @@ CREATE TABLE IF NOT EXISTS error_events (
   last_seen TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_error_events_last_seen ON error_events(last_seen);
+
+-- Phase 3: fees. Money is stored in paisa (1 NPR = 100 paisa) as integers, never as floats.
+CREATE TABLE IF NOT EXISTS fee_heads (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT 'tuition' CHECK(category IN ('tuition','exam','transport','hostel','library','admission','uniform','other')),
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS fee_structures (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id INTEGER NOT NULL REFERENCES academic_sessions(id),
+  class_level INTEGER NOT NULL,
+  period TEXT NOT NULL,            -- e.g. 'Term 1', 'Annual'
+  fee_head_id INTEGER NOT NULL REFERENCES fee_heads(id),
+  amount_paisa INTEGER NOT NULL CHECK(amount_paisa > 0),
+  due_date TEXT NOT NULL,          -- YYYY-MM-DD
+  UNIQUE(session_id, class_level, period, fee_head_id)
+);
+
+-- One invoice per student, session and period. Totals are recomputed from the items.
+CREATE TABLE IF NOT EXISTS invoices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  invoice_no TEXT NOT NULL UNIQUE,
+  student_id INTEGER NOT NULL REFERENCES users(id),
+  session_id INTEGER NOT NULL REFERENCES academic_sessions(id),
+  period TEXT NOT NULL,
+  class_level INTEGER NOT NULL,
+  section TEXT,
+  gross_paisa INTEGER NOT NULL DEFAULT 0,
+  concession_paisa INTEGER NOT NULL DEFAULT 0,
+  net_paisa INTEGER NOT NULL DEFAULT 0,
+  due_date TEXT NOT NULL,
+  created_by INTEGER,
+  created_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(student_id, session_id, period)
+);
+
+CREATE TABLE IF NOT EXISTS invoice_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  invoice_id INTEGER NOT NULL REFERENCES invoices(id),
+  fee_head_id INTEGER NOT NULL REFERENCES fee_heads(id),
+  description TEXT NOT NULL,
+  gross_paisa INTEGER NOT NULL CHECK(gross_paisa >= 0),
+  concession_paisa INTEGER NOT NULL DEFAULT 0 CHECK(concession_paisa >= 0),
+  net_paisa INTEGER NOT NULL CHECK(net_paisa >= 0),
+  UNIQUE(invoice_id, fee_head_id)
+);
+
+-- Discounts and scholarships. A second person must approve them (maker and checker are different people).
+CREATE TABLE IF NOT EXISTS concessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  student_id INTEGER NOT NULL REFERENCES users(id),
+  session_id INTEGER NOT NULL REFERENCES academic_sessions(id),
+  period TEXT NOT NULL,
+  fee_head_id INTEGER NOT NULL REFERENCES fee_heads(id),
+  amount_paisa INTEGER NOT NULL CHECK(amount_paisa > 0),
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'requested' CHECK(status IN ('requested','approved','rejected')),
+  requested_by INTEGER,
+  decided_by INTEGER,
+  decided_at TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Payments are append-only. A refund is a negative row that points at the payment it reverses.
+CREATE TABLE IF NOT EXISTS payments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  invoice_id INTEGER NOT NULL REFERENCES invoices(id),
+  student_id INTEGER NOT NULL REFERENCES users(id),
+  kind TEXT NOT NULL CHECK(kind IN ('payment','refund')),
+  amount_paisa INTEGER NOT NULL,
+  method TEXT NOT NULL CHECK(method IN ('cash','bank','khalti')),
+  reference TEXT,
+  refund_of_id INTEGER REFERENCES payments(id),
+  recorded_by INTEGER,
+  created_at TEXT DEFAULT (datetime('now')),
+  CHECK((kind = 'payment' AND amount_paisa > 0) OR (kind = 'refund' AND amount_paisa < 0))
+);
+CREATE TRIGGER IF NOT EXISTS payments_no_update BEFORE UPDATE ON payments
+BEGIN SELECT RAISE(ABORT, 'payments are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS payments_no_delete BEFORE DELETE ON payments
+BEGIN SELECT RAISE(ABORT, 'payments are append-only'); END;
+
+-- One receipt per payment. Numbers run 1, 2, 3 with no gaps, assigned inside the payment transaction.
+CREATE TABLE IF NOT EXISTS receipts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  receipt_no INTEGER NOT NULL UNIQUE,
+  payment_id INTEGER NOT NULL UNIQUE REFERENCES payments(id),
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Online payment attempts. The pidx and the provider transaction id each identify at most one payment.
+CREATE TABLE IF NOT EXISTS gateway_transactions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  provider TEXT NOT NULL DEFAULT 'khalti',
+  pidx TEXT UNIQUE,
+  purchase_order_id TEXT NOT NULL UNIQUE,
+  invoice_id INTEGER NOT NULL REFERENCES invoices(id),
+  student_id INTEGER NOT NULL REFERENCES users(id),
+  amount_paisa INTEGER NOT NULL CHECK(amount_paisa > 0),
+  status TEXT NOT NULL DEFAULT 'initiated' CHECK(status IN ('initiated','completed','failed','expired','canceled')),
+  provider_status TEXT,
+  provider_transaction_id TEXT UNIQUE,
+  payment_id INTEGER UNIQUE REFERENCES payments(id),
+  failure_reason TEXT,
+  initiated_by INTEGER,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);

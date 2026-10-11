@@ -37,6 +37,7 @@ import messageRoutes from './routes/messages.js';
 import studentImportRoutes from './routes/studentImport.js';
 import opsRoutes from './routes/ops.js';
 import studentPhotoRoutes from './routes/studentPhotos.js';
+import { feesRouter, feesPortalRouter } from './routes/fees.js';
 import { captureError } from './services/errorLog.js';
 import { requireFileAccess } from './middleware/auth.js';
 import db from './db/index.js';
@@ -134,6 +135,8 @@ export function createApp() {
   app.use('/api/messages', messageRoutes);
   app.use('/api/student-import', studentImportRoutes);
   app.use('/api/ops', opsRoutes);
+  app.use('/api/fees', feesRouter);
+  app.use('/api/guardian', feesPortalRouter);
 
   // Unknown API paths must return JSON 404, not the SPA shell.
   app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
