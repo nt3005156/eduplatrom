@@ -162,10 +162,14 @@ const approvedFor = db.prepare(`SELECT COALESCE(SUM(amount_paisa), 0) AS s FROM 
   WHERE student_id = ? AND session_id = ? AND period = ? AND fee_head_id = ? AND status = 'approved'`);
 const updItem = db.prepare('UPDATE invoice_items SET concession_paisa = ?, net_paisa = ? WHERE id = ?');
 const updInvTotals = db.prepare('UPDATE invoices SET gross_paisa = ?, concession_paisa = ?, net_paisa = ? WHERE id = ?');
-const paidFor = db.prepare('SELECT COALESCE(SUM(amount_paisa), 0) AS s FROM payments WHERE invoice_id = ?');
+// Settled amount on an invoice = payments received, minus the part that became credit (an overpayment),
+// minus credit applied to the invoice. Both kinds of credit row are stored with a negative sign, so they are
+// subtracted together: 'credit' rows are positive (excess) and 'apply' rows are negative (applied).
+const paidFor = db.prepare(`SELECT (SELECT COALESCE(SUM(amount_paisa), 0) FROM payments WHERE invoice_id = ?)
+  - (SELECT COALESCE(SUM(amount_paisa), 0) FROM credit_ledger WHERE invoice_id = ? AND kind IN ('credit', 'apply')) AS s`);
 
 export function paidTotal(invoiceId) {
-  return paidFor.get(invoiceId).s;
+  return paidFor.get(invoiceId, invoiceId).s;
 }
 
 /**
@@ -213,6 +217,7 @@ export function generateInvoices(input, req) {
     ORDER BY name, id`).all(class_level, section, section);
 
   const result = { created: [], existing: [] };
+  let creditApplied = 0;
   writeTx(() => {
     for (const s of students) {
       const existing = selInvoiceByStudent.get(s.id, Number(input.session_id), period);
@@ -226,6 +231,8 @@ export function generateInvoices(input, req) {
       setInvoiceNo.run(`INV-${String(invoiceId).padStart(6, '0')}`, invoiceId);
       for (const l of lines) insItem.run(invoiceId, l.fee_head_id, `${l.name} (${period})`, l.amount_paisa, l.amount_paisa);
       recomputeInvoice(invoiceId);
+      // Credit on the account is applied to new invoices automatically.
+      creditApplied += applyCreditTo(db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId), actorId(req));
       result.created.push(invoiceId);
     }
   })();
@@ -233,7 +240,7 @@ export function generateInvoices(input, req) {
     module: 'fees', action: 'invoices_generated', description: `Class ${class_level}${section ? ' ' + section : ''}, ${period}`,
     newValue: { created: result.created.length, existing: result.existing.length, session_id: Number(input.session_id) },
   });
-  return { ...result, skipped_existing: result.existing.length, fee_lines: lines.length, students: students.length };
+  return { ...result, skipped_existing: result.existing.length, fee_lines: lines.length, students: students.length, credit_applied_paisa: creditApplied };
 }
 
 export function invoiceStatus({ net, paid, due_date }, today) {
@@ -255,7 +262,8 @@ function withTotals(row, today) {
 
 const INVOICE_SELECT = `
   SELECT i.*, u.name AS student_name, u.roll_no,
-    COALESCE((SELECT SUM(p.amount_paisa) FROM payments p WHERE p.invoice_id = i.id), 0) AS paid_paisa
+    ((SELECT COALESCE(SUM(p.amount_paisa), 0) FROM payments p WHERE p.invoice_id = i.id)
+      - (SELECT COALESCE(SUM(c.amount_paisa), 0) FROM credit_ledger c WHERE c.invoice_id = i.id AND c.kind IN ('credit', 'apply'))) AS paid_paisa
   FROM invoices i JOIN users u ON u.id = i.student_id`;
 
 export function listInvoices({ session_id, class_level, section, student_id, status } = {}, today = todayNepal()) {
@@ -276,6 +284,7 @@ export function invoiceDetail(invoiceId, today = todayNepal()) {
   if (!row) return null;
   const inv = withTotals(row, today);
   inv.items = selItems.all(inv.id);
+  inv.credit_applied_paisa = -db.prepare("SELECT COALESCE(SUM(amount_paisa), 0) AS s FROM credit_ledger WHERE invoice_id = ? AND kind = 'apply'").get(inv.id).s;
   inv.payments = db.prepare(`
     SELECT p.id, p.kind, p.amount_paisa, p.method, p.reference, p.refund_of_id, p.created_at, r.receipt_no
     FROM payments p LEFT JOIN receipts r ON r.payment_id = p.id WHERE p.invoice_id = ? ORDER BY p.id`).all(inv.id);
@@ -360,23 +369,172 @@ export function balanceOf(invoiceId) {
   return inv ? inv.net_paisa - paidTotal(invoiceId) : null;
 }
 
+const insCredit = db.prepare(`INSERT INTO credit_ledger (student_id, kind, amount_paisa, invoice_id, source_payment_id, reference, reason, recorded_by)
+  VALUES (?,?,?,?,?,?,?,?)`);
+const insDeposit = db.prepare('INSERT INTO bank_deposits (invoice_id, student_id, amount_paisa, reference, recorded_by) VALUES (?,?,?,?,?)');
+
+export function creditBalance(studentId) {
+  return db.prepare('SELECT COALESCE(SUM(amount_paisa), 0) AS s FROM credit_ledger WHERE student_id = ?').get(Number(studentId)).s;
+}
+
+/**
+ * Writes a payment for an invoice. Any amount above the balance becomes credit on the student's account.
+ * Must run inside writeTx.
+ */
+export function postPayment(inv, { amount, method, reference = null, recordedBy = null }) {
+  const balanceBefore = Math.max(0, inv.net_paisa - paidTotal(inv.id));
+  const written = writePaymentWithReceipt(inv, { amount, method, reference, recordedBy });
+  const excess = amount - balanceBefore;
+  if (excess > 0) insCredit.run(inv.student_id, 'credit', excess, inv.id, written.payment_id, reference, 'Overpayment', recordedBy);
+  return { ...written, credit_added_paisa: Math.max(0, excess) };
+}
+
+/** Applies credit to one invoice, up to its balance. Must run inside writeTx. Returns paisa applied. */
+function applyCreditTo(inv, recordedBy) {
+  const balance = Math.max(0, inv.net_paisa - paidTotal(inv.id));
+  const take = Math.min(balance, Math.max(0, creditBalance(inv.student_id)));
+  if (take > 0) insCredit.run(inv.student_id, 'apply', -take, inv.id, null, null, 'Applied to invoice', recordedBy);
+  return take;
+}
+
+export function applyCreditToInvoice(invoiceId, req) {
+  return writeTx(() => {
+    const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(Number(invoiceId));
+    if (!inv) throw new FeeError(404, 'Invoice not found');
+    const applied = applyCreditTo(inv, actorId(req));
+    if (applied === 0) throw new FeeError(409, 'There is no credit to apply, or the invoice has no balance');
+    logAudit(req, { module: 'fees', action: 'credit_applied', description: `Credit applied to ${inv.invoice_no}`, newValue: { amount_paisa: applied } });
+    return { applied_paisa: applied, balance_paisa: Math.max(0, inv.net_paisa - paidTotal(inv.id)), credit_left_paisa: creditBalance(inv.student_id) };
+  })();
+}
+
+/** Cash is posted at once. Bank deposits wait in the verification queue (see decideBankDeposit). */
 export function recordOfflinePayment(input, req) {
   if (!OFFLINE_METHODS.includes(input.method)) throw new FeeError(400, 'method must be cash or bank');
   assertPaisa(input.amount_paisa);
-  const reference = input.method === 'bank'
-    ? cleanText(input.reference, { field: 'reference (deposit slip or transaction number)', max: 100 })
-    : (input.reference ? cleanText(input.reference, { field: 'reference', max: 100, required: false }) : null);
+  if (input.method === 'bank') return submitBankDeposit(input, req);
+  const reference = input.reference ? cleanText(input.reference, { field: 'reference', max: 100, required: false }) : null;
   return writeTx(() => {
     const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(Number(input.invoice_id));
     if (!inv) throw new FeeError(404, 'Invoice not found');
     const balance = inv.net_paisa - paidTotal(inv.id);
     if (balance <= 0) throw new FeeError(409, 'Invoice has no balance to pay');
     if (input.amount_paisa > balance) throw new FeeError(409, `Amount is more than the balance of ${balance} paisa`);
-    const written = writePaymentWithReceipt(inv, { amount: input.amount_paisa, method: input.method, reference, recordedBy: actorId(req) });
-    logAudit(req, { module: 'fees', action: 'payment_recorded', description: `${input.method} payment on ${inv.invoice_no}`,
-      newValue: { payment_id: written.payment_id, receipt_no: written.receipt_no, amount_paisa: input.amount_paisa, method: input.method } });
-    return { ...written, balance_after_paisa: balance - input.amount_paisa, invoice_no: inv.invoice_no };
+    const written = postPayment(inv, { amount: input.amount_paisa, method: 'cash', reference, recordedBy: actorId(req) });
+    logAudit(req, { module: 'fees', action: 'payment_recorded', description: `cash payment on ${inv.invoice_no}`,
+      newValue: { payment_id: written.payment_id, receipt_no: written.receipt_no, amount_paisa: input.amount_paisa, method: 'cash' } });
+    return { ...written, status: 'posted', balance_after_paisa: balance - input.amount_paisa, invoice_no: inv.invoice_no };
   })();
+}
+
+function submitBankDeposit(input, req) {
+  const reference = cleanText(input.reference, { field: 'reference (deposit slip or transaction number)', max: 100 });
+  const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(Number(input.invoice_id));
+  if (!inv) throw new FeeError(404, 'Invoice not found');
+  const balance = inv.net_paisa - paidTotal(inv.id);
+  if (balance <= 0) throw new FeeError(409, 'Invoice has no balance to pay');
+  if (input.amount_paisa > balance) throw new FeeError(409, `Amount is more than the balance of ${balance} paisa`);
+  let r;
+  try {
+    r = insDeposit.run(inv.id, inv.student_id, input.amount_paisa, reference, actorId(req));
+  } catch (err) {
+    if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') throw new FeeError(409, 'This deposit reference was already recorded');
+    throw err;
+  }
+  logAudit(req, { module: 'fees', action: 'bank_deposit_submitted', description: `Bank deposit on ${inv.invoice_no} waiting for verification`,
+    newValue: { deposit_id: Number(r.lastInsertRowid), amount_paisa: input.amount_paisa } });
+  return { deposit_id: Number(r.lastInsertRowid), status: 'pending_verification', invoice_no: inv.invoice_no };
+}
+
+export function listDeposits({ status } = {}) {
+  return db.prepare(`
+    SELECT d.*, u.name AS student_name, i.invoice_no FROM bank_deposits d
+    JOIN users u ON u.id = d.student_id JOIN invoices i ON i.id = d.invoice_id
+    ${status ? 'WHERE d.status = ?' : ''} ORDER BY d.id DESC`).all(...(status ? [status] : []));
+}
+
+/**
+ * A second person verifies a bank deposit. The person who recorded it cannot verify it.
+ * Approval posts the payment and its receipt. Rejection posts nothing.
+ */
+export function decideBankDeposit(id, input, req) {
+  if (!['approve', 'reject'].includes(input.decision)) throw new FeeError(400, 'decision must be approve or reject');
+  const note = input.note ? cleanText(input.note, { field: 'note', max: 300, required: false }) : null;
+  return writeTx(() => {
+    const d = db.prepare('SELECT * FROM bank_deposits WHERE id = ?').get(Number(id));
+    if (!d) throw new FeeError(404, 'Deposit not found');
+    if (d.status !== 'pending') throw new FeeError(409, `Deposit is already ${d.status}`);
+    if (d.recorded_by === actorId(req)) throw new FeeError(403, 'The person who recorded a deposit cannot verify it');
+    if (input.decision === 'reject') {
+      db.prepare("UPDATE bank_deposits SET status = 'rejected', decided_by = ?, decided_at = datetime('now'), decision_note = ? WHERE id = ?")
+        .run(actorId(req), note, d.id);
+      logAudit(req, { module: 'fees', action: 'bank_deposit_rejected', description: `Deposit ${d.id} rejected`, newValue: { deposit_id: d.id, note } });
+      return { id: d.id, status: 'rejected' };
+    }
+    const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(d.invoice_id);
+    const written = postPayment(inv, { amount: d.amount_paisa, method: 'bank', reference: d.reference, recordedBy: d.recorded_by });
+    db.prepare(`UPDATE bank_deposits SET status = 'posted', decided_by = ?, decided_at = datetime('now'), decision_note = ?, payment_id = ? WHERE id = ?`)
+      .run(actorId(req), note, written.payment_id, d.id);
+    logAudit(req, { module: 'fees', action: 'bank_deposit_posted', description: `Deposit ${d.id} posted on ${inv.invoice_no}`,
+      newValue: { deposit_id: d.id, payment_id: written.payment_id, receipt_no: written.receipt_no, amount_paisa: d.amount_paisa, credit_added_paisa: written.credit_added_paisa } });
+    return { id: d.id, status: 'posted', payment_id: written.payment_id, receipt_no: written.receipt_no, credit_added_paisa: written.credit_added_paisa };
+  })();
+}
+
+export function creditStatement(studentId) {
+  requireStudent(studentId);
+  const entries = db.prepare('SELECT id, kind, amount_paisa, invoice_id, source_payment_id, reference, reason, created_at FROM credit_ledger WHERE student_id = ? ORDER BY id').all(Number(studentId));
+  return { student_id: Number(studentId), balance_paisa: entries.reduce((s, e) => s + e.amount_paisa, 0), entries };
+}
+
+/** Explicit refund of credit to the family, on request. Admin only (fees.refund). The bank reference is required. */
+export function refundCredit(studentId, input, req) {
+  const reason = cleanText(input.reason, { field: 'reason', min: 3, max: 300 });
+  const reference = cleanText(input.reference, { field: 'reference (bank transfer or cheque)', max: 100 });
+  return writeTx(() => {
+    requireStudent(studentId);
+    const available = creditBalance(studentId);
+    if (available <= 0) throw new FeeError(409, 'There is no credit to refund');
+    const amount = input.amount_paisa === undefined ? available : input.amount_paisa;
+    assertPaisa(amount);
+    if (amount > available) throw new FeeError(409, `Only ${available} paisa of credit is available`);
+    insCredit.run(Number(studentId), 'refund', -amount, null, null, reference, reason, actorId(req));
+    logAudit(req, { module: 'fees', action: 'credit_refunded', description: `Credit refund for student ${studentId}`,
+      newValue: { amount_paisa: amount, reference } });
+    return { amount_paisa: amount, balance_after_paisa: available - amount };
+  })();
+}
+
+export const CREDIT_AUTO_REFUND_DAYS = Math.max(1, Number(process.env.FEES_CREDIT_AUTO_REFUND_DAYS) || 90);
+
+/**
+ * Automatic refunds, run by the daily job. Two rules:
+ *   - the student's account is archived or disabled: refund the whole credit balance;
+ *   - the credit has not moved (no credit or application) for CREDIT_AUTO_REFUND_DAYS: refund the balance.
+ * The refund is recorded with no bank reference. Finance must record the payout reference before the money leaves.
+ */
+export function autoRefundCredits(now = new Date()) {
+  const cutoff = new Date(now.getTime() - CREDIT_AUTO_REFUND_DAYS * 86400000).toISOString().slice(0, 19).replace('T', ' ');
+  const candidates = db.prepare(`
+    SELECT u.id, u.name, u.account_status,
+      (SELECT COALESCE(SUM(c.amount_paisa), 0) FROM credit_ledger c WHERE c.student_id = u.id) AS balance,
+      (SELECT MAX(c.created_at) FROM credit_ledger c WHERE c.student_id = u.id) AS last_activity
+    FROM users u WHERE u.role = 'student' AND u.id IN (SELECT student_id FROM credit_ledger)`).all();
+  const refunded = [];
+  writeTx(() => {
+    for (const c of candidates) {
+      if (c.balance <= 0) continue;
+      let reason = null;
+      if (c.account_status !== 'active') reason = 'account closed';
+      else if (c.last_activity && c.last_activity <= cutoff) reason = `credit unused for ${CREDIT_AUTO_REFUND_DAYS} days`;
+      if (!reason) continue;
+      insCredit.run(c.id, 'refund', -c.balance, null, null, null, `Automatic: ${reason}`, null);
+      logAudit(null, { module: 'fees', action: 'credit_auto_refunded', description: `Automatic refund for student ${c.id}: ${reason}`,
+        actorOverride: { name: 'Daily fee job', role: 'system' }, newValue: { amount_paisa: c.balance, reason } });
+      refunded.push({ student_id: c.id, name: c.name, amount_paisa: c.balance, reason });
+    }
+  })();
+  return refunded;
 }
 
 /**

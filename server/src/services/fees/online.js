@@ -12,7 +12,7 @@ import { randomUUID } from 'crypto';
 import db from '../../db/index.js';
 import { logAudit } from '../../utils/audit.js';
 import { GatewayError, khaltiClient, khaltiConfig } from './khalti.js';
-import { FeeError, paidTotal, writePaymentWithReceipt, writeTx } from './ledger.js';
+import { FeeError, paidTotal, postPayment, writeTx } from './ledger.js';
 
 const selInvoice = db.prepare('SELECT * FROM invoices WHERE id = ?');
 const selGatewayByPidx = db.prepare('SELECT * FROM gateway_transactions WHERE pidx = ?');
@@ -81,7 +81,9 @@ export async function verifyKhaltiReturn(pidx) {
   try {
     look = await khaltiClient().lookup(key);
   } catch (err) {
-    // Lookup failed. Do not change the attempt; the user can retry the return link.
+    // Lookup failed. Do not change the attempt; the user can retry the return link. Counted in the ops summary.
+    logAudit(null, { module: 'fees', action: 'lookup_unavailable', status: 'failure', description: 'Khalti lookup did not complete',
+      actorOverride: { name: 'Khalti return', role: 'system' }, newValue: { gateway_id: gw.id, reason: err.code || 'error' } });
     return { outcome: 'unverified', reason: err.code || 'error' };
   }
   const providerStatus = String(look.status || '');
@@ -115,13 +117,14 @@ export async function verifyKhaltiReturn(pidx) {
       return { outcome: 'duplicate_transaction' };
     }
     const inv = selInvoice.get(fresh.invoice_id);
-    const written = writePaymentWithReceipt(inv, { amount: fresh.amount_paisa, method: 'khalti', reference: txnId, recordedBy: null });
+    // Anything above the balance (the balance moved since the payment started) becomes credit, not a refused payment.
+    const written = postPayment(inv, { amount: fresh.amount_paisa, method: 'khalti', reference: txnId, recordedBy: null });
     db.prepare(`UPDATE gateway_transactions SET status = 'completed', provider_transaction_id = ?, payment_id = ?, updated_at = datetime('now') WHERE id = ?`)
       .run(txnId, written.payment_id, fresh.id);
     logAudit(null, { module: 'fees', action: 'online_payment_received', description: `Khalti payment verified on ${inv.invoice_no}`,
       actorOverride: { name: 'Khalti return', role: 'system' },
-      newValue: { payment_id: written.payment_id, receipt_no: written.receipt_no, amount_paisa: fresh.amount_paisa, gateway_id: fresh.id } });
-    return { outcome: 'paid', payment_id: written.payment_id, receipt_no: written.receipt_no };
+      newValue: { payment_id: written.payment_id, receipt_no: written.receipt_no, amount_paisa: fresh.amount_paisa, gateway_id: fresh.id, credit_added_paisa: written.credit_added_paisa } });
+    return { outcome: 'paid', payment_id: written.payment_id, receipt_no: written.receipt_no, credit_added_paisa: written.credit_added_paisa };
   })();
 }
 

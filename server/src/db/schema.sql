@@ -926,3 +926,77 @@ CREATE TABLE IF NOT EXISTS gateway_transactions (
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
+
+-- Phase 3 controls: bank deposits need verification by a second person before they are posted.
+CREATE TABLE IF NOT EXISTS bank_deposits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  invoice_id INTEGER NOT NULL REFERENCES invoices(id),
+  student_id INTEGER NOT NULL REFERENCES users(id),
+  amount_paisa INTEGER NOT NULL CHECK(amount_paisa > 0),
+  reference TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','posted','rejected')),
+  recorded_by INTEGER,
+  decided_by INTEGER,
+  decided_at TEXT,
+  decision_note TEXT,
+  payment_id INTEGER UNIQUE REFERENCES payments(id),
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Overpayments and refunds. A credit is positive. An application to an invoice and a refund are negative.
+-- Append-only, like payments.
+CREATE TABLE IF NOT EXISTS credit_ledger (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  student_id INTEGER NOT NULL REFERENCES users(id),
+  kind TEXT NOT NULL CHECK(kind IN ('credit','apply','refund')),
+  amount_paisa INTEGER NOT NULL,
+  invoice_id INTEGER REFERENCES invoices(id),
+  source_payment_id INTEGER REFERENCES payments(id),
+  reference TEXT,
+  reason TEXT,
+  recorded_by INTEGER,
+  created_at TEXT DEFAULT (datetime('now')),
+  CHECK((kind = 'credit' AND amount_paisa > 0) OR (kind IN ('apply','refund') AND amount_paisa < 0))
+);
+CREATE TRIGGER IF NOT EXISTS credit_ledger_no_update BEFORE UPDATE ON credit_ledger
+BEGIN SELECT RAISE(ABORT, 'credit ledger is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS credit_ledger_no_delete BEFORE DELETE ON credit_ledger
+BEGIN SELECT RAISE(ABORT, 'credit ledger is append-only'); END;
+
+-- One row per scheduled job per school date. Stops the daily job from running twice.
+CREATE TABLE IF NOT EXISTS fee_job_runs (
+  job TEXT NOT NULL,
+  run_date TEXT NOT NULL,
+  started_at TEXT DEFAULT (datetime('now')),
+  summary TEXT,
+  PRIMARY KEY (job, run_date)
+);
+
+-- Reconciliation mismatches. Kept until someone resolves them, so an old mismatch does not disappear from the list.
+CREATE TABLE IF NOT EXISTS reconciliation_exceptions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  exception_key TEXT NOT NULL UNIQUE,
+  type TEXT NOT NULL,
+  amount_paisa INTEGER,
+  details TEXT,
+  status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','resolved')),
+  first_seen_date TEXT NOT NULL,
+  last_seen_date TEXT NOT NULL,
+  escalated_at TEXT,
+  resolved_by INTEGER,
+  resolved_at TEXT,
+  resolution_note TEXT
+);
+
+-- Internal reports sent to finance and ops. Status records what actually happened to each one.
+CREATE TABLE IF NOT EXISTS fee_dispatches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_date TEXT NOT NULL,
+  audience TEXT NOT NULL CHECK(audience IN ('finance','ops','head_of_finance')),
+  recipient TEXT,
+  subject TEXT NOT NULL,
+  body TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('sent','simulated','held','failed')),
+  error TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);

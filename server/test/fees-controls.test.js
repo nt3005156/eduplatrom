@@ -1,0 +1,358 @@
+// Phase 3 controls: bank deposit verification, overpayment as credit, explicit and automatic refunds,
+// and the daily reconciliation job (window, once per day, exceptions, dispatch, escalation).
+// Dates are fixed for the job: "now" is passed in, so the tests do not depend on the clock.
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import bcrypt from 'bcryptjs';
+
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nitex-fees-ctl-'));
+process.env.NODE_ENV = 'test';
+process.env.DB_PATH = path.join(tmpDir, 'controls.db');
+process.env.UPLOADS_DIR = path.join(tmpDir, 'uploads');
+process.env.JWT_SECRET = 'test-secret-test-secret-test-secret-ctl';
+fs.mkdirSync(process.env.UPLOADS_DIR, { recursive: true });
+process.env.KHALTI_SECRET_KEY = 'test-not-a-real-key';
+process.env.PUBLIC_BASE_URL = 'https://school.example.test';
+// Job recipients and a small escalation threshold (NPR 10 = 1000 paisa). Email mode is "log" (simulated) in tests.
+process.env.FEES_FINANCE_EMAILS = 'finance@school.test';
+process.env.FEES_OPS_EMAILS = 'ops@school.test';
+delete process.env.FEES_HEAD_FINANCE_EMAILS;
+process.env.FEES_ESCALATE_AMOUNT_PAISA = '1000';
+delete process.env.MESSAGING_EMAIL_PROVIDER;
+
+const { createApp } = await import('../src/app.js');
+const { default: db } = await import('../src/db/index.js');
+const { setKhaltiClientForTest, GatewayError } = await import('../src/services/fees/khalti.js');
+const { runDailyFeeJob, dispatchRows } = await import('../src/services/fees/dailyJob.js');
+const { creditBalance } = await import('../src/services/fees/ledger.js');
+
+const PW = 'Ctl-Test-Pass-2026';
+const ID = {};
+const T = {};
+let server;
+let base;
+let sessionId;
+let headTui;
+
+const kh = { txns: {}, n: 0 };
+function fakeClient() {
+  return {
+    initiate: async payload => {
+      kh.n++;
+      const pidx = `CTL-${kh.n}`;
+      kh.txns[pidx] = { pidx, status: 'Pending', total_amount: payload.amount, transaction_id: null };
+      return { pidx, payment_url: `https://test-pay.khalti.test/?pidx=${pidx}`, expires_at: null };
+    },
+    lookup: async pidx => {
+      const t = kh.txns[pidx];
+      if (!t) throw new GatewayError('rejected', 'unknown');
+      return { ...t };
+    },
+  };
+}
+
+function addUser(key, { role, class_level = null, section = null, roleKey = null, email = null }) {
+  const roleId = roleKey ? db.prepare('SELECT id FROM roles WHERE key = ?').get(roleKey).id : null;
+  const addr = email || `${key.toLowerCase()}@ctl.test`;
+  ID[key] = Number(db.prepare(`INSERT INTO users (name, email, password_hash, role, class_level, section, approval_status, account_status, role_id)
+    VALUES (?,?,?,?,?,?, 'approved', 'active', ?)`).run(key, addr, bcrypt.hashSync(PW, 4), role, class_level, section, roleId).lastInsertRowid);
+}
+
+async function login(key) {
+  const email = db.prepare('SELECT email FROM users WHERE id = ?').get(ID[key]).email;
+  const r = await fetch(base + '/api/auth/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-NITEX-Client': 'web' },
+    body: JSON.stringify({ email, password: PW }),
+  });
+  assert.equal(r.status, 200, `login ${key}`);
+  T[key] = (await r.json()).token;
+}
+async function call(who, method, url, body) {
+  const headers = who ? { Authorization: `Bearer ${T[who]}`, 'X-NITEX-Client': 'web', 'Content-Type': 'application/json' } : { 'X-NITEX-Client': 'web' };
+  const r = await fetch(base + url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  let json = null;
+  try { json = await r.json(); } catch { json = null; }
+  return { status: r.status, body: json };
+}
+
+const invoiceOf = (studentKey, period) => db.prepare('SELECT id FROM invoices WHERE student_id = ? AND period = ?').get(ID[studentKey], period).id;
+const balanceOf = async id => (await call('admin', 'GET', `/api/fees/invoices/${id}`)).body.balance_paisa;
+
+before(async () => {
+  db.prepare("INSERT INTO roles (key, label, rank, is_system_role, description) VALUES ('fee_clerk','Fee clerk',3,0,'test')").run();
+  db.prepare("INSERT INTO roles (key, label, rank, is_system_role, description) VALUES ('fee_manager','Finance manager',2,0,'test')").run();
+  const grant = (roleKey, perms) => {
+    const rid = db.prepare('SELECT id FROM roles WHERE key = ?').get(roleKey).id;
+    for (const p of perms) db.prepare("INSERT INTO role_permissions (role_id, permission_id, effect) VALUES (?,?, 'allow')")
+      .run(rid, db.prepare('SELECT id FROM permissions WHERE key = ?').get(p).id);
+  };
+  grant('fee_clerk', ['fees.view', 'fees.collect', 'fees.manage']);
+  grant('fee_manager', ['fees.view', 'fees.collect', 'fees.manage', 'fees.verify_deposit']);
+
+  addUser('admin', { role: 'admin', roleKey: 'system_admin' });
+  addUser('clerk', { role: 'teacher', roleKey: 'fee_clerk' });
+  addUser('manager', { role: 'teacher', roleKey: 'fee_manager' });
+  addUser('gOver', { role: 'guardian', roleKey: 'guardian' });
+  addUser('sOver', { role: 'student', class_level: 6, section: 'A' });
+  addUser('sOld', { role: 'student', class_level: 6, section: 'B' });
+  addUser('sClosed', { role: 'student', class_level: 6, section: 'C' });
+  addUser('sStale', { role: 'student', class_level: 6, section: 'D' });
+  addUser('sRecent', { role: 'student', class_level: 6, section: 'E' });
+  db.prepare('INSERT INTO guardian_students (guardian_id, student_id, can_view_fees, can_pay_fees) VALUES (?,?,1,1)').run(ID.gOver, ID.sOver);
+
+  sessionId = Number(db.prepare("INSERT INTO academic_sessions (name, start_date, end_date) VALUES ('2026-2027','2026-04-01','2027-03-31')").run().lastInsertRowid);
+  headTui = db.prepare("INSERT INTO fee_heads (code, name, category) VALUES ('TUI','Tuition','tuition')").run().lastInsertRowid;
+
+  server = createApp().listen(0);
+  await new Promise(r => server.once('listening', r));
+  base = `http://127.0.0.1:${server.address().port}`;
+  setKhaltiClientForTest(fakeClient());
+  for (const k of Object.keys(ID)) await login(k);
+
+  const put = await call('admin', 'PUT', '/api/fees/structures', {
+    session_id: sessionId, class_level: 6, period: 'Term 1',
+    items: [{ fee_head_id: headTui, amount_paisa: 100000, due_date: '2026-09-15' }],
+  });
+  assert.equal(put.status, 200);
+  const gen = await call('clerk', 'POST', '/api/fees/invoices/generate', { session_id: sessionId, class_level: 6, period: 'Term 1' });
+  assert.equal(gen.status, 201);
+});
+
+after(() => {
+  setKhaltiClientForTest(null);
+  server?.close();
+  try { db.close(); } catch { /* already closed */ }
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+// ---------- bank deposits: recorded by one person, verified by another ----------
+
+test('a bank deposit is pending and posts nothing until verified; reference is unique', async () => {
+  const inv = invoiceOf('sOld', 'Term 1');
+  const before = await balanceOf(inv);
+  const sub = await call('clerk', 'POST', '/api/fees/payments', { invoice_id: inv, amount_paisa: 20000, method: 'bank', reference: 'DEP-1' });
+  assert.equal(sub.status, 201);
+  assert.equal(sub.body.status, 'pending_verification');
+  assert.equal(sub.body.payment_id, undefined, 'no payment id yet');
+  assert.equal(await balanceOf(inv), before, 'balance unchanged while pending');
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM payments WHERE reference = 'DEP-1'").get().n, 0);
+  const dup = await call('clerk', 'POST', '/api/fees/payments', { invoice_id: inv, amount_paisa: 100, method: 'bank', reference: 'DEP-1' });
+  assert.equal(dup.status, 409);
+});
+
+test('the person who recorded a deposit cannot verify it, and the clerk cannot verify at all', async () => {
+  const sub = await call('manager', 'POST', '/api/fees/payments', { invoice_id: invoiceOf('sOld', 'Term 1'), amount_paisa: 5000, method: 'bank', reference: 'DEP-M1' });
+  assert.equal(sub.status, 201);
+  const self = await call('manager', 'POST', `/api/fees/deposits/${sub.body.deposit_id}/decision`, { decision: 'approve' });
+  assert.equal(self.status, 403);
+  const clerkTry = await call('clerk', 'POST', `/api/fees/deposits/${sub.body.deposit_id}/decision`, { decision: 'approve' });
+  assert.equal(clerkTry.status, 403, 'clerk has no fees.verify_deposit');
+});
+
+test('a verified deposit posts the payment and a receipt; a rejected one posts nothing and cannot be decided twice', async () => {
+  const inv = invoiceOf('sOld', 'Term 1');
+  const before = await balanceOf(inv);
+  const list = await call('manager', 'GET', '/api/fees/deposits?status=pending');
+  const pending = list.body.deposits.find(d => d.reference === 'DEP-1');
+  assert.ok(pending);
+  const ok = await call('manager', 'POST', `/api/fees/deposits/${pending.id}/decision`, { decision: 'approve' });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.ok(ok.body.receipt_no >= 1);
+  assert.equal(await balanceOf(inv), before - 20000);
+
+  const rej = await call('clerk', 'POST', '/api/fees/payments', { invoice_id: inv, amount_paisa: 3000, method: 'bank', reference: 'DEP-R1' });
+  const rejDeposit = rej.body.deposit_id;
+  const decided = await call('admin', 'POST', `/api/fees/deposits/${rejDeposit}/decision`, { decision: 'reject', note: 'Slip does not match the bank' });
+  assert.equal(decided.body.status, 'rejected');
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM payments WHERE reference = 'DEP-R1'").get().n, 0);
+  const again = await call('admin', 'POST', `/api/fees/deposits/${rejDeposit}/decision`, { decision: 'approve' });
+  assert.equal(again.status, 409);
+});
+
+// ---------- overpayment becomes credit ----------
+
+test('an overpaid online payment becomes credit, and the credit is applied to the next invoice generated', async () => {
+  const t1 = invoiceOf('sOver', 'Term 1');
+  const start = await call('gOver', 'POST', `/api/guardian/fees/invoices/${t1}/pay-online`, {});
+  assert.equal(start.status, 201, JSON.stringify(start.body));
+  const pidx = start.body.payment_url.split('pidx=')[1];
+  // Cash arrives while the online payment is open. The balance drops to 60000.
+  const cash = await call('clerk', 'POST', '/api/fees/payments', { invoice_id: t1, amount_paisa: 40000, method: 'cash' });
+  assert.equal(cash.status, 201);
+  kh.txns[pidx].status = 'Completed';
+  kh.txns[pidx].transaction_id = 'TXN-OVER-1';
+  const r = await call(null, 'GET', `/api/fees/khalti/return?pidx=${pidx}`);
+  assert.equal(r.body.outcome, 'paid');
+  assert.equal(r.body.credit_added_paisa, 40000, 'the 40000 above the 60000 balance is credit');
+  assert.equal(await balanceOf(t1), 0);
+  assert.equal(creditBalance(ID.sOver), 40000);
+
+  const structure = await call('admin', 'PUT', '/api/fees/structures', {
+    session_id: sessionId, class_level: 6, period: 'Term 2',
+    items: [{ fee_head_id: headTui, amount_paisa: 100000, due_date: '2026-12-15' }],
+  });
+  assert.equal(structure.status, 200);
+  const gen = await call('clerk', 'POST', '/api/fees/invoices/generate', { session_id: sessionId, class_level: 6, period: 'Term 2' });
+  assert.equal(gen.status, 201);
+  assert.equal(gen.body.credit_applied_paisa, 40000);
+  const t2 = invoiceOf('sOver', 'Term 2');
+  const detail = (await call('admin', 'GET', `/api/fees/invoices/${t2}`)).body;
+  assert.equal(detail.credit_applied_paisa, 40000);
+  assert.equal(detail.balance_paisa, 60000);
+  assert.equal(creditBalance(ID.sOver), 0);
+});
+
+test('credit is not applied to an existing invoice unless someone asks for it', async () => {
+  const t1 = invoiceOf('sOver', 'Term 1');
+  const sumBefore = db.prepare("SELECT COUNT(*) AS n FROM credit_ledger WHERE invoice_id = ? AND kind = 'apply'").get(t1).n;
+  assert.equal(sumBefore, 0);
+  const none = await call('clerk', 'POST', `/api/fees/invoices/${t1}/apply-credit`, {});
+  assert.equal(none.status, 409, 'nothing to apply: the invoice is paid and there is no credit');
+});
+
+test('an explicit refund of credit needs admin, a bank reference, and a cap at the credit balance', async () => {
+  const t2 = invoiceOf('sOver', 'Term 2');
+  const start = await call('gOver', 'POST', `/api/guardian/fees/invoices/${t2}/pay-online`, {});
+  assert.equal(start.status, 201);
+  const pidx = start.body.payment_url.split('pidx=')[1];
+  await call('clerk', 'POST', '/api/fees/payments', { invoice_id: t2, amount_paisa: 10000, method: 'cash' });
+  kh.txns[pidx].status = 'Completed';
+  kh.txns[pidx].transaction_id = 'TXN-OVER-2';
+  const r = await call(null, 'GET', `/api/fees/khalti/return?pidx=${pidx}`);
+  assert.equal(r.body.credit_added_paisa, 10000);
+  assert.equal(creditBalance(ID.sOver), 10000);
+
+  const byClerk = await call('clerk', 'POST', `/api/fees/students/${ID.sOver}/credit/refund`, { reason: 'Family asked', reference: 'NEFT-0' });
+  assert.equal(byClerk.status, 403);
+  const noRef = await call('admin', 'POST', `/api/fees/students/${ID.sOver}/credit/refund`, { reason: 'Family asked', amount_paisa: 4000 });
+  assert.equal(noRef.status, 400);
+  const tooMuch = await call('admin', 'POST', `/api/fees/students/${ID.sOver}/credit/refund`, { reason: 'Family asked', amount_paisa: 15000, reference: 'NEFT-1' });
+  assert.equal(tooMuch.status, 409);
+  const part = await call('admin', 'POST', `/api/fees/students/${ID.sOver}/credit/refund`, { reason: 'Family asked', amount_paisa: 4000, reference: 'NEFT-2' });
+  assert.equal(part.status, 201);
+  assert.equal(part.body.balance_after_paisa, 6000);
+  const rest = await call('admin', 'POST', `/api/fees/students/${ID.sOver}/credit/refund`, { reason: 'Family asked', reference: 'NEFT-3' });
+  assert.equal(rest.body.amount_paisa, 6000);
+  assert.equal(creditBalance(ID.sOver), 0);
+  const none = await call('admin', 'POST', `/api/fees/students/${ID.sOver}/credit/refund`, { reason: 'Again', reference: 'NEFT-4' });
+  assert.equal(none.status, 409);
+  const statement = await call('admin', 'GET', `/api/fees/students/${ID.sOver}/credit`);
+  assert.equal(statement.body.balance_paisa, 0);
+  assert.ok(statement.body.entries.some(e => e.kind === 'refund' && e.reference === 'NEFT-2'));
+});
+
+// Credit rows are inserted directly here, to set their dates. The ledger is append-only, so these are inserts only.
+function seedCredit(studentKey, amount, createdAt) {
+  db.prepare(`INSERT INTO credit_ledger (student_id, kind, amount_paisa, reason, created_at) VALUES (?, 'credit', ?, 'test seed', ?)`)
+    .run(ID[studentKey], amount, createdAt);
+}
+
+// ---------- daily job ----------
+// Timeline (Nepal time). Each run covers the school date before its own date.
+//   Day 1: run 2026-10-12 01:00, reconciles 2026-10-11
+//   Day 2: run 2026-10-13 01:00, reconciles 2026-10-12
+//   Day 4: run 2026-10-15 01:00, reconciles 2026-10-14 (48 hours after day 2)
+const DAY1 = new Date('2026-10-11T19:15:00Z');
+const DAY1_AFTERNOON = new Date('2026-10-12T07:15:00Z'); // 13:00 Nepal on 2026-10-12
+const DAY2 = new Date('2026-10-12T19:15:00Z');
+const DAY4 = new Date('2026-10-14T19:15:00Z');
+
+test('automatic refunds: a closed account is refunded; credit unused for 90 days is refunded; recent credit is not', async () => {
+  seedCredit('sClosed', 5000, '2026-10-10 00:00:00');
+  db.prepare("UPDATE users SET account_status = 'archived' WHERE id = ?").run(ID.sClosed);
+  seedCredit('sStale', 7000, '2026-01-01 00:00:00');
+  seedCredit('sRecent', 3000, '2026-10-10 00:00:00');
+
+  const outside = await runDailyFeeJob({ now: DAY1_AFTERNOON });
+  assert.equal(outside.ran, false);
+  assert.equal(outside.reason, 'outside_window');
+  assert.equal(creditBalance(ID.sClosed), 5000, 'nothing ran outside the window');
+
+  const first = await runDailyFeeJob({ now: DAY1 });
+  assert.equal(first.ran, true);
+  assert.equal(first.run_date, '2026-10-12');
+  assert.equal(creditBalance(ID.sClosed), 0);
+  assert.equal(creditBalance(ID.sStale), 0, 'unused for over 90 days: refunded');
+  assert.equal(creditBalance(ID.sRecent), 3000, 'recent credit is left alone');
+  const stale = db.prepare("SELECT amount_paisa, reason, reference FROM credit_ledger WHERE student_id = ? AND kind = 'refund'").all(ID.sStale);
+  assert.equal(stale.length, 1);
+  assert.match(stale[0].reason, /Automatic: credit unused for 90 days/);
+  assert.equal(stale[0].reference, null, 'automatic refunds carry no bank reference until finance records the payout');
+  assert.match(db.prepare("SELECT reason FROM credit_ledger WHERE student_id = ? AND kind = 'refund'").get(ID.sClosed).reason, /account closed/);
+});
+
+test('the daily job runs once per school date, even when called again or forced', async () => {
+  const again = await runDailyFeeJob({ now: DAY1 });
+  assert.equal(again.reason, 'already_ran');
+  const forced = await runDailyFeeJob({ now: DAY1_AFTERNOON, force: true });
+  assert.equal(forced.reason, 'already_ran', 'a manual run on the same school date does not repeat the job');
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM fee_job_runs WHERE run_date = '2026-10-12'").get().n, 1);
+});
+
+test('a mismatch becomes an exception, is dispatched to finance and ops, and escalates when above the threshold', async () => {
+  const inv = invoiceOf('sRecent', 'Term 1');
+  // Payments dated 2026-10-12 (Nepal) with no receipt: one under the threshold (1000 paisa), one above it.
+  db.prepare("INSERT INTO payments (invoice_id, student_id, kind, amount_paisa, method, reference, created_at) VALUES (?,?, 'payment', 500, 'cash', 'ORPH-SMALL', '2026-10-12 10:00:00')")
+    .run(inv, ID.sRecent);
+  db.prepare("INSERT INTO payments (invoice_id, student_id, kind, amount_paisa, method, reference, created_at) VALUES (?,?, 'payment', 2000, 'cash', 'ORPH-BIG', '2026-10-12 11:00:00')")
+    .run(inv, ID.sRecent);
+
+  const r = await runDailyFeeJob({ now: DAY2 });
+  assert.equal(r.ran, true);
+  assert.equal(r.run_date, '2026-10-13');
+  assert.equal(r.summary.mismatches_found, 2);
+  assert.equal(r.summary.open_exceptions >= 2, true);
+
+  const small = db.prepare("SELECT * FROM reconciliation_exceptions WHERE exception_key LIKE 'payment_without_receipt:%' AND amount_paisa = 500").get();
+  const big = db.prepare("SELECT * FROM reconciliation_exceptions WHERE exception_key LIKE 'payment_without_receipt:%' AND amount_paisa = 2000").get();
+  assert.ok(small && big);
+  assert.equal(small.status, 'open');
+  assert.equal(small.first_seen_date, '2026-10-13');
+  assert.equal(small.escalated_at, null, 'under the threshold and under 48 hours: not escalated yet');
+  assert.ok(big.escalated_at, 'above the threshold: escalated on the first day');
+
+  const rows = dispatchRows('2026-10-13');
+  assert.ok(rows.some(x => x.audience === 'finance' && x.recipient === 'finance@school.test' && x.status === 'simulated'), 'finance got the itemized report');
+  assert.ok(rows.some(x => x.audience === 'ops' && x.recipient === 'ops@school.test' && x.status === 'simulated'), 'ops got the summary');
+  const head = rows.filter(x => x.audience === 'head_of_finance');
+  assert.equal(head.length, 1, 'one escalation email');
+  assert.equal(head[0].status, 'held', 'no Head of Finance address is configured, so it is held, not dropped');
+  assert.match(head[0].error, /FEES_HEAD_FINANCE_EMAILS/);
+});
+
+test('an exception stays open across runs and escalates after 48 hours', async () => {
+  const r = await runDailyFeeJob({ now: DAY4 });
+  assert.equal(r.ran, true);
+  assert.equal(r.run_date, '2026-10-15');
+  const small = db.prepare("SELECT * FROM reconciliation_exceptions WHERE exception_key LIKE 'payment_without_receipt:%' AND amount_paisa = 500").get();
+  assert.equal(small.status, 'open', 'nothing auto-closes an exception');
+  assert.ok(small.escalated_at, 'open for two days: escalated');
+  const heads = dispatchRows('2026-10-15').filter(x => x.audience === 'head_of_finance');
+  assert.equal(heads.length, 1, 'only the newly escalated item is sent');
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM reconciliation_exceptions WHERE exception_key LIKE 'payment_without_receipt:%' AND escalated_at IS NOT NULL").get().n, 2);
+});
+
+test('an exception is closed by a person with a note; the close is audited and cannot be repeated', async () => {
+  const small = db.prepare("SELECT id FROM reconciliation_exceptions WHERE exception_key LIKE 'payment_without_receipt:%' AND amount_paisa = 500").get();
+  const tooShort = await call('clerk', 'POST', `/api/fees/reconciliation/exceptions/${small.id}/resolve`, { note: 'x' });
+  assert.equal(tooShort.status, 400);
+  const ok = await call('clerk', 'POST', `/api/fees/reconciliation/exceptions/${small.id}/resolve`, { note: 'Receipt issued late, cash in drawer' });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  const open = await call('admin', 'GET', '/api/fees/reconciliation/exceptions?status=open');
+  assert.ok(!open.body.exceptions.some(e => e.id === small.id), 'resolved items leave the open list');
+  const again = await call('admin', 'POST', `/api/fees/reconciliation/exceptions/${small.id}/resolve`, { note: 'Second try' });
+  assert.equal(again.status, 409);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE module = 'fees' AND action = 'reconciliation_resolved'").get().n, 1);
+});
+
+test('the Head of Finance escalation list and ops summary report the real counts', async () => {
+  const rows = dispatchRows('2026-10-15');
+  assert.ok(rows.some(x => x.audience === 'ops' && x.status === 'simulated'));
+  const job = db.prepare("SELECT summary FROM fee_job_runs WHERE job = 'daily' AND run_date = '2026-10-15'").get();
+  const summary = JSON.parse(job.summary);
+  assert.equal(summary.escalated, 1);
+  assert.ok(summary.open_exceptions >= 1);
+});

@@ -11,7 +11,9 @@ import * as ledger from '../services/fees/ledger.js';
 import { FeeError } from '../services/fees/ledger.js';
 import { GatewayError } from '../services/fees/khalti.js';
 import { startOnlinePayment, verifyKhaltiReturn } from '../services/fees/online.js';
+import { runDailyFeeJob } from '../services/fees/dailyJob.js';
 import db from '../db/index.js';
+import { logAudit } from '../utils/audit.js';
 
 export const feesRouter = Router();
 export const feesPortalRouter = Router();
@@ -115,7 +117,52 @@ feesRouter.post('/reconcile', requireAuth, requirePermission('fees.view'), wrap(
 // It writes only what the server-side lookup confirms, so a forged or repeated return does no harm.
 feesRouter.get('/khalti/return', wrap(async (req, res) => {
   const result = await verifyKhaltiReturn(req.query.pidx);
-  res.set('Cache-Control', 'no-store').json({ outcome: result.outcome, payment_id: result.payment_id, receipt_no: result.receipt_no });
+  res.set('Cache-Control', 'no-store').json({ outcome: result.outcome, payment_id: result.payment_id, receipt_no: result.receipt_no, credit_added_paisa: result.credit_added_paisa });
+}));
+
+// Bank deposits: recorded by one person, verified by another (fees.verify_deposit).
+feesRouter.get('/deposits', requireAuth, requirePermission('fees.view'), wrap((req, res) => {
+  res.json({ deposits: ledger.listDeposits(req.query) });
+}));
+
+feesRouter.post('/deposits/:id/decision', requireAuth, requirePermission('fees.verify_deposit'), wrap((req, res) => {
+  res.json(ledger.decideBankDeposit(idParam(req), req.body || {}, req));
+}));
+
+// Credit (overpayments held on the account).
+feesRouter.get('/students/:id/credit', requireAuth, requirePermission('fees.view'), wrap((req, res) => {
+  res.json(ledger.creditStatement(idParam(req)));
+}));
+
+feesRouter.post('/students/:id/credit/refund', requireAuth, requirePermission('fees.refund'), wrap((req, res) => {
+  res.status(201).json(ledger.refundCredit(idParam(req), req.body || {}, req));
+}));
+
+feesRouter.post('/invoices/:id/apply-credit', requireAuth, requirePermission('fees.collect'), wrap((req, res) => {
+  res.json(ledger.applyCreditToInvoice(idParam(req), req));
+}));
+
+// Reconciliation exceptions. They stay open until someone resolves them with a note.
+feesRouter.get('/reconciliation/exceptions', requireAuth, requirePermission('fees.view'), wrap((req, res) => {
+  const status = req.query.status === 'resolved' ? 'resolved' : 'open';
+  res.json({ exceptions: db.prepare('SELECT * FROM reconciliation_exceptions WHERE status = ? ORDER BY id').all(status) });
+}));
+
+feesRouter.post('/reconciliation/exceptions/:id/resolve', requireAuth, requirePermission('fees.manage'), wrap((req, res) => {
+  const note = String(req.body?.note || '').trim();
+  if (note.length < 3 || note.length > 500) throw new FeeError(400, 'A resolution note of 3 to 500 characters is required');
+  const row = db.prepare('SELECT * FROM reconciliation_exceptions WHERE id = ?').get(idParam(req));
+  if (!row) throw new FeeError(404, 'Exception not found');
+  if (row.status !== 'open') throw new FeeError(409, 'Exception is already resolved');
+  db.prepare("UPDATE reconciliation_exceptions SET status = 'resolved', resolved_by = ?, resolved_at = datetime('now'), resolution_note = ? WHERE id = ?")
+    .run(req.user.id, note, row.id);
+  logAudit(req, { module: 'fees', action: 'reconciliation_resolved', description: `Exception ${row.id} resolved`, newValue: { type: row.type, note } });
+  res.json({ id: row.id, status: 'resolved' });
+}));
+
+// Runs the daily job now. The job still runs only once per school date.
+feesRouter.post('/jobs/daily/run', requireAuth, requirePermission('fees.manage'), wrap(async (req, res) => {
+  res.json(await runDailyFeeJob({ force: true }));
 }));
 
 // ---------- guardian portal ----------

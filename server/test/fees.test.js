@@ -74,6 +74,15 @@ async function call(who, method, url, body) {
   return { status: r.status, body: json };
 }
 
+async function bankPay(invoiceId, amount, reference) {
+  const sub = await call('clerk', 'POST', '/api/fees/payments', { invoice_id: invoiceId, amount_paisa: amount, method: 'bank', reference });
+  assert.equal(sub.status, 201, JSON.stringify(sub.body));
+  assert.equal(sub.body.status, 'pending_verification');
+  const dec = await call('admin', 'POST', `/api/fees/deposits/${sub.body.deposit_id}/decision`, { decision: 'approve' });
+  assert.equal(dec.status, 200, JSON.stringify(dec.body));
+  return { payment_id: dec.body.payment_id, receipt_no: dec.body.receipt_no };
+}
+
 let sessionId, headTui, headExm, invKid, invKid2, invOther;
 
 before(async () => {
@@ -377,24 +386,23 @@ test('a concession must match a fee charged to the student’s class for that pe
 // ---------- refunds ----------
 
 test('a refund reverses cleanly, can be partial, is capped, and is audited', async () => {
-  const pay = await call('clerk', 'POST', '/api/fees/payments', { invoice_id: invKid2, amount_paisa: 20000, method: 'bank', reference: 'SLIP-REF-9' });
-  assert.equal(pay.status, 201);
+  const pay = { payment_id: (await bankPay(invKid2, 20000, 'SLIP-REF-9')).payment_id };
   const before = (await call('admin', 'GET', `/api/fees/invoices/${invKid2}`)).body.balance_paisa;
-  const clerkRefund = await call('clerk', 'POST', `/api/fees/payments/${pay.body.payment_id}/refund`, { amount_paisa: 5000, reason: 'Entered twice' });
+  const clerkRefund = await call('clerk', 'POST', `/api/fees/payments/${pay.payment_id}/refund`, { amount_paisa: 5000, reason: 'Entered twice' });
   assert.equal(clerkRefund.status, 403, 'refund is admin only');
-  const part = await call('admin', 'POST', `/api/fees/payments/${pay.body.payment_id}/refund`, { amount_paisa: 5000, reason: 'Entered twice' });
+  const part = await call('admin', 'POST', `/api/fees/payments/${pay.payment_id}/refund`, { amount_paisa: 5000, reason: 'Entered twice' });
   assert.equal(part.status, 201);
   assert.equal(part.body.refundable_left_paisa, 15000);
   const mid = (await call('admin', 'GET', `/api/fees/invoices/${invKid2}`)).body.balance_paisa;
   assert.equal(mid, before + 5000, 'balance goes back up by the refund');
-  const over = await call('admin', 'POST', `/api/fees/payments/${pay.body.payment_id}/refund`, { amount_paisa: 15001, reason: 'Too much' });
+  const over = await call('admin', 'POST', `/api/fees/payments/${pay.payment_id}/refund`, { amount_paisa: 15001, reason: 'Too much' });
   assert.equal(over.status, 409);
-  const rest = await call('admin', 'POST', `/api/fees/payments/${pay.body.payment_id}/refund`, { reason: 'Rest of the deposit reversed' });
+  const rest = await call('admin', 'POST', `/api/fees/payments/${pay.payment_id}/refund`, { reason: 'Rest of the deposit reversed' });
   assert.equal(rest.status, 201);
   assert.equal(rest.body.refundable_left_paisa, 0);
-  const none = await call('admin', 'POST', `/api/fees/payments/${pay.body.payment_id}/refund`, { reason: 'Again' });
+  const none = await call('admin', 'POST', `/api/fees/payments/${pay.payment_id}/refund`, { reason: 'Again' });
   assert.equal(none.status, 409);
-  const sum = db.prepare('SELECT SUM(amount_paisa) AS s FROM payments WHERE invoice_id = ? AND (id = ? OR refund_of_id = ?)').get(invKid2, pay.body.payment_id, pay.body.payment_id).s;
+  const sum = db.prepare('SELECT SUM(amount_paisa) AS s FROM payments WHERE invoice_id = ? AND (id = ? OR refund_of_id = ?)').get(invKid2, pay.payment_id, pay.payment_id).s;
   assert.equal(sum, 0, 'the payment and its refunds net to zero');
   const audit = db.prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE module = 'fees' AND action = 'payment_refunded'").get().n;
   assert.ok(audit >= 2, 'each refund is audited');

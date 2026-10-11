@@ -39,6 +39,7 @@ export const PERMISSIONS = [
   { key: 'fees.collect', module: 'fees', label: 'Record cash and bank payments', description: 'Record a cash or bank deposit against an invoice and issue its receipt.' },
   { key: 'fees.manage', module: 'fees', label: 'Manage fee structures and invoices', description: 'Fee heads, class fee structures, invoice generation, and concession requests.' },
   { key: 'fees.approve_concession', module: 'fees', label: 'Approve fee concessions', description: 'Approve or reject a concession requested by someone else.', is_dangerous: 1, admin_only: 1 },
+  { key: 'fees.verify_deposit', module: 'fees', label: 'Verify bank deposits', description: 'Post or reject a bank deposit that someone else recorded. Not granted by default; grant to the finance manager.', is_dangerous: 1 },
   { key: 'fees.refund', module: 'fees', label: 'Refund payments', description: 'Reverse a payment. Creates an audited negative entry.', is_dangerous: 1, admin_only: 1 },
   // content
   { key: 'content.create', module: 'content', label: 'Create learning content', description: 'Upload notes/videos/PDFs for an assigned subject.' },

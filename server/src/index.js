@@ -4,6 +4,7 @@ import { createApp } from './app.js';
 import { processOutbox, purgeOldMessages } from './services/messaging/outbox.js';
 import { purgeExpiredRefreshTokens } from './services/sessions.js';
 import { captureError } from './services/errorLog.js';
+import { runDailyFeeJob } from './services/fees/dailyJob.js';
 
 // Errors outside a request (a failed timer, an unhandled promise) are recorded too, then the process keeps going
 // for rejections and exits for uncaught exceptions, as Node expects.
@@ -22,6 +23,15 @@ setInterval(() => {
   try { purgeExpiredRefreshTokens(); }
   catch (err) { console.error('session cleanup error:', err.message); }
 }, 24 * 60 * 60 * 1000).unref();
+
+// Daily fee job. Checks every 10 minutes; it acts only between 00:00 and 02:00 Nepal time, once per day.
+if (process.env.FEES_DAILY_JOB !== 'off') {
+  setInterval(() => {
+    runDailyFeeJob()
+      .then(r => { if (r.ran) console.log(`fee daily job: ran for ${r.run_date}`); })
+      .catch(err => console.error('fee daily job error:', err.message));
+  }, 10 * 60 * 1000).unref();
+}
 
 // Parent alert worker. Set MESSAGING_WORKER=off to run the HTTP server without sending.
 if (process.env.MESSAGING_WORKER !== 'off') {
