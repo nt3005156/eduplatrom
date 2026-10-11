@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import db from '../db/index.js';
-import { signToken, requireAuth } from '../middleware/auth.js';
+import { signToken, requireAuth, setFileCookie, clearFileCookie } from '../middleware/auth.js';
 import { notifyAdmins } from '../utils/notify.js';
 import { levelForXp } from '../utils/gamification.js';
 import { logAudit } from '../utils/audit.js';
@@ -120,10 +120,12 @@ router.post('/login', (req, res) => {
 
   logAudit(req, { module: 'auth', action: 'login', description: `${user.name} logged in`, actorOverride: safeUser });
 
+  setFileCookie(req, res, user);
   res.json({ token, user: safeUser });
 });
 
 router.post('/logout', requireAuth, (req, res) => {
+  clearFileCookie(req, res);
   logAudit(req, { module: 'auth', action: 'logout', description: `${req.user.name} logged out` });
   res.json({ ok: true });
 });
@@ -131,6 +133,7 @@ router.post('/logout', requireAuth, (req, res) => {
 router.get('/me', requireAuth, (req, res) => {
   const user = db.prepare(`SELECT ${SAFE_FIELDS} FROM users WHERE id = ?`).get(req.user.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
+  setFileCookie(req, res, { id: user.id, role: user.role });
   res.json({ user: { ...user, level: levelForXp(user.xp || 0), streak: streakStatus(user.streak_last_date) } });
 });
 

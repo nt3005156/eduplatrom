@@ -10,6 +10,7 @@ import { notifyClass } from '../utils/notify.js';
 import { awardXp, touchStreak } from '../utils/gamification.js';
 import { logAudit } from '../utils/audit.js';
 import { resolveScope, isWithinScope } from '../services/scope.js';
+import { randomUUID } from 'crypto';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
@@ -27,7 +28,7 @@ const ALLOWED_MIME = new Set([
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOAD_DIR),
   filename: (req, file, cb) => {
-    const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    const unique = randomUUID();
     cb(null, unique + path.extname(file.originalname));
   }
 });

@@ -8,6 +8,7 @@ import db from '../db/index.js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { notifyAdmins, notifyUser } from '../utils/notify.js';
 import { logAudit } from '../utils/audit.js';
+import { randomUUID } from 'crypto';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
@@ -15,7 +16,7 @@ if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOAD_DIR),
-  filename: (req, file, cb) => cb(null, 'app-doc-' + Date.now() + '-' + Math.round(Math.random() * 1e9) + path.extname(file.originalname)),
+  filename: (req, file, cb) => cb(null, 'app-doc-' + randomUUID() + path.extname(file.originalname)),
 });
 const upload = multer({ storage, limits: { fileSize: 15 * 1024 * 1024 } });
 

@@ -1,4 +1,5 @@
 import jwt from 'jsonwebtoken';
+import db from '../db/index.js';
 
 const IS_PROD = process.env.NODE_ENV === 'production';
 if (IS_PROD && (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32)) {
@@ -55,6 +56,12 @@ export function requireAuth(req, res, next) {
   const token = header.split(' ')[1];
   try {
     const payload = jwt.verify(token, JWT_SECRET);
+    // Check the live account, not just the token: a disabled or archived user
+    // must lose access immediately, not when their 7-day token expires.
+    const acct = db.prepare('SELECT account_status FROM users WHERE id = ?').get(payload.id);
+    if (!acct || (acct.account_status && acct.account_status !== 'active')) {
+      return res.status(401).json({ error: 'Account is not active' });
+    }
     req.user = payload;
     next();
   } catch (e) {
@@ -104,3 +111,49 @@ export function requireAcademicHead(req, res, next) {
 
 export { JWT_SECRET };
 
+// --- Authenticated file access -------------------------------------------
+// Uploaded files (student submissions, application documents, materials) are
+// personal data, so they are never served anonymously. A browser cannot send an
+// Authorization header on a plain <a href>, so login sets a short-lived HttpOnly
+// cookie scoped to /uploads. API clients may still send a Bearer token.
+export const FILE_COOKIE = 'nitex_file';
+const FILE_COOKIE_MAX_AGE = 7 * 24 * 60 * 60;
+
+function cookieSecure(req) {
+  return IS_PROD || req.secure || req.headers['x-forwarded-proto'] === 'https';
+}
+
+export function setFileCookie(req, res, user) {
+  const token = jwt.sign({ id: user.id, role: user.role, purpose: 'file' }, JWT_SECRET, { expiresIn: FILE_COOKIE_MAX_AGE });
+  res.append('Set-Cookie', `${FILE_COOKIE}=${token}; Path=/uploads; HttpOnly; SameSite=Lax; Max-Age=${FILE_COOKIE_MAX_AGE}${cookieSecure(req) ? '; Secure' : ''}`);
+}
+
+export function clearFileCookie(req, res) {
+  res.append('Set-Cookie', `${FILE_COOKIE}=; Path=/uploads; HttpOnly; SameSite=Lax; Max-Age=0${cookieSecure(req) ? '; Secure' : ''}`);
+}
+
+function readCookie(header, name) {
+  if (!header) return null;
+  for (const part of header.split(';')) {
+    const [k, ...v] = part.trim().split('=');
+    if (k === name) return decodeURIComponent(v.join('='));
+  }
+  return null;
+}
+
+export function requireFileAccess(req, res, next) {
+  const bearer = req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.split(' ')[1] : null;
+  const token = bearer || readCookie(req.headers.cookie, FILE_COOKIE);
+  if (!token) return res.status(401).json({ error: 'Sign in to open this file' });
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    const acct = db.prepare('SELECT account_status FROM users WHERE id = ?').get(payload.id);
+    if (!acct || (acct.account_status && acct.account_status !== 'active')) {
+      return res.status(401).json({ error: 'Account is not active' });
+    }
+    req.user = payload;
+    next();
+  } catch {
+    return res.status(401).json({ error: 'Sign in to open this file' });
+  }
+}

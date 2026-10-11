@@ -6,14 +6,17 @@ import { fileURLToPath } from 'url';
 import db from '../db/index.js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { logAudit } from '../utils/audit.js';
+import { randomUUID } from 'crypto';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
+// Branding (logo/favicon) is shown on the public login page, so it lives in a
+// public folder. Everything else under /uploads requires sign-in.
+const UPLOAD_DIR = path.join(__dirname, '..', 'uploads', 'public');
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOAD_DIR),
-  filename: (req, file, cb) => cb(null, 'brand-' + Date.now() + '-' + Math.round(Math.random() * 1e9) + path.extname(file.originalname)),
+  filename: (req, file, cb) => cb(null, 'brand-' + randomUUID() + path.extname(file.originalname)),
 });
 const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 } });
 
@@ -129,7 +132,7 @@ router.put('/', requireAuth, requireAdmin, (req, res) => {
 // Upload a branding image (logo / favicon / hero) and get back a URL to save via PUT /settings
 router.post('/upload', requireAuth, requireAdmin, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  res.json({ url: `/uploads/${req.file.filename}` });
+  res.json({ url: `/uploads/public/${req.file.filename}` });
 });
 
 // Student/any authenticated user: update their own theme preference

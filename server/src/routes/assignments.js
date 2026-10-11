@@ -11,6 +11,7 @@ import { notifyClass, notifyUser, notifyTeachersForClass } from '../utils/notify
 import { awardXp, touchStreak } from '../utils/gamification.js';
 import { logAudit } from '../utils/audit.js';
 import { resolveScope, isWithinScope, scopeWhereClause } from '../services/scope.js';
+import { randomUUID } from 'crypto';
 
 // Assignment descriptions support basic rich text (per the redesign spec), but the raw
 // HTML comes from teacher input and is stored verbatim — sanitize server-side too as
@@ -27,7 +28,7 @@ if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOAD_DIR),
-  filename: (req, file, cb) => cb(null, Date.now() + '-' + Math.round(Math.random() * 1e9) + path.extname(file.originalname)),
+  filename: (req, file, cb) => cb(null, randomUUID() + path.extname(file.originalname)),
 });
 
 // Block dangerous executable/script file types regardless of what an individual

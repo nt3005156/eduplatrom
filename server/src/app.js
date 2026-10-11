@@ -31,6 +31,8 @@ import rolesRoutes from './routes/roles.js';
 import permissionsRoutes from './routes/permissions.js';
 import academicHeadRoutes from './routes/academicHead.js';
 import attendanceRoutes from './routes/attendance.js';
+import privacyRoutes from './routes/privacy.js';
+import { requireFileAccess } from './middleware/auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLIENT_DIST = path.join(__dirname, '..', '..', 'client', 'dist');
@@ -53,7 +55,17 @@ export function createApp() {
   app.use(cors());
   if (process.env.NODE_ENV !== 'test') app.use(morgan('dev'));
   app.use(express.json({ limit: '2mb' }));
-  app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+  // Files: public only under uploads/public (branding). Everything else needs
+  // a signed-in user (HttpOnly cookie for browser links, or a Bearer token).
+  const UPLOADS_DIR = path.join(__dirname, 'uploads');
+  app.use('/uploads/public', express.static(path.join(UPLOADS_DIR, 'public'), { dotfiles: 'deny', index: false, maxAge: '1d' }));
+  app.use('/uploads', (req, res, next) => {
+    // Logos uploaded before the public folder existed keep working on the login page.
+    if (/^\/brand-[\w.-]+$/.test(req.path)) return next();
+    return requireFileAccess(req, res, next);
+  }, express.static(UPLOADS_DIR, { dotfiles: 'deny', index: false }));
+  // Missing or rejected files stop here, so they never fall through to the web app shell.
+  app.use('/uploads', (req, res) => res.status(404).json({ error: 'File not found' }));
 
   // General API rate limit, plus a tighter limit on auth endpoints.
   app.use('/api', rateLimit({ windowMs: 15 * 60 * 1000, max: 600, standardHeaders: true, legacyHeaders: false }));
@@ -79,6 +91,7 @@ export function createApp() {
   app.use('/api/permissions', permissionsRoutes);
   app.use('/api/academic-head', academicHeadRoutes);
   app.use('/api/attendance', attendanceRoutes);
+  app.use('/api/privacy', privacyRoutes);
 
   // Unknown API paths must return JSON 404, not the SPA shell.
   app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
