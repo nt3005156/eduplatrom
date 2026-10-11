@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import db from '../db/index.js';
-import { requireAuth, requireAdmin } from '../middleware/auth.js';
+import { requireAuth, requireAdmin, revokeSessions } from '../middleware/auth.js';
 import { notifyUser } from '../utils/notify.js';
 import { logAudit } from '../utils/audit.js';
 
@@ -108,6 +108,7 @@ router.put('/:id/archive', requireAuth, requireAdmin, (req, res) => {
   const user = db.prepare("SELECT * FROM users WHERE id = ? AND role='student'").get(req.params.id);
   if (!user) return res.status(404).json({ error: 'Student not found' });
   db.prepare("UPDATE users SET account_status = 'archived' WHERE id = ?").run(req.params.id);
+  revokeSessions(user.id);
   logAudit(req, {
     module: 'applications', action: 'archived',
     description: `${req.user.name} archived ${user.name}'s account`,

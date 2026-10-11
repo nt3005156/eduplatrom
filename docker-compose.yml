@@ -1,0 +1,15 @@
+# Local or single-server deployment. Put real values in .env (never commit it).
+services:
+  app:
+    build: .
+    env_file: .env
+    ports:
+      - "4000:4000"
+    volumes:
+      - nitex-data:/data
+      - nitex-uploads:/app/server/src/uploads
+    restart: unless-stopped
+
+volumes:
+  nitex-data:
+  nitex-uploads:

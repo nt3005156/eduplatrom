@@ -12,7 +12,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { Router } from 'express';
 import db from '../db/index.js';
-import { requireAuth, requireAdmin } from '../middleware/auth.js';
+import { requireAuth, requireAdmin, revokeSessions } from '../middleware/auth.js';
 import { logAudit } from '../utils/audit.js';
 
 const router = Router();
@@ -87,6 +87,7 @@ router.post('/users/:id/anonymize', requireAuth, requireAdmin, (req, res) => {
 
   let filesRemoved = 0;
   const tx = db.transaction(() => {
+    revokeSessions(id);
     const subs = db.prepare('SELECT id, file_path, attachments FROM submissions WHERE student_id = ?').all(id);
     for (const s of subs) {
       if (deleteUpload(s.file_path)) filesRemoved++;

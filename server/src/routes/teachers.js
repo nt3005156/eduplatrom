@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import db from '../db/index.js';
-import { requireAuth, requireAdmin } from '../middleware/auth.js';
+import { requireAuth, requireAdmin, revokeSessions } from '../middleware/auth.js';
+import { PASSWORD_MIN_LENGTH, passwordProblem } from '../utils/passwordPolicy.js';
 import { notifyUser } from '../utils/notify.js';
 import { logAudit } from '../utils/audit.js';
 import { invalidateUserRoleCache } from '../services/permissions.js';
@@ -46,7 +47,7 @@ const STAFF_ROLE_LABELS = {
 function randomPassword() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
   let out = '';
-  for (let i = 0; i < 10; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  for (let i = 0; i < 14; i++) out += chars[Math.floor(Math.random() * chars.length)];
   return out;
 }
 
@@ -94,7 +95,8 @@ router.get('/:id', requireAuth, requireAdmin, (req, res) => {
 router.post('/', requireAuth, requireAdmin, (req, res) => {
   const { name, email, password, staff_role } = req.body;
   if (!name || !email || !password) return res.status(400).json({ error: 'name, email, and password are required' });
-  if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  const problem = passwordProblem(password);
+  if (problem) return res.status(400).json({ error: problem });
   if (staff_role && !STAFF_ROLES.includes(staff_role)) return res.status(400).json({ error: 'Invalid staff_role' });
 
   const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email.toLowerCase());
@@ -157,6 +159,7 @@ router.put('/:id/status', requireAuth, requireAdmin, (req, res) => {
   if (!teacher) return res.status(404).json({ error: 'Teacher not found' });
 
   db.prepare('UPDATE users SET account_status = ? WHERE id = ?').run(account_status, teacher.id);
+  if (account_status === 'disabled') revokeSessions(teacher.id);
 
   logAudit(req, {
     module: 'users', action: account_status === 'disabled' ? 'disabled' : 'enabled',
@@ -182,9 +185,15 @@ router.put('/:id/reset-password', requireAuth, requireAdmin, (req, res) => {
   const teacher = db.prepare("SELECT * FROM users WHERE id = ? AND role = 'teacher'").get(req.params.id);
   if (!teacher) return res.status(404).json({ error: 'Teacher not found' });
 
-  const password = new_password && new_password.length >= 6 ? new_password : randomPassword();
+  // An admin-chosen password must meet the policy. Leaving it empty generates one.
+  if (new_password) {
+    const problem = passwordProblem(new_password);
+    if (problem) return res.status(400).json({ error: problem });
+  }
+  const password = new_password || randomPassword();
   const hash = bcrypt.hashSync(password, 10);
   db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, teacher.id);
+  revokeSessions(teacher.id); // the old password's sessions end immediately
 
   logAudit(req, {
     module: 'users', action: 'password_reset',

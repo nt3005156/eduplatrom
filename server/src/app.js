@@ -33,6 +33,7 @@ import academicHeadRoutes from './routes/academicHead.js';
 import attendanceRoutes from './routes/attendance.js';
 import privacyRoutes from './routes/privacy.js';
 import { requireFileAccess } from './middleware/auth.js';
+import db from './db/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLIENT_DIST = path.join(__dirname, '..', '..', 'client', 'dist');
@@ -49,11 +50,34 @@ export function createApp() {
     app.set('trust proxy', v === 'true' ? true : Number.isNaN(Number(v)) ? v : Number(v));
   }
 
-  // Security headers. CSP/COEP disabled: the API is JSON and the SPA is served
-  // from the same origin; a strict default CSP would only break the Vite bundle.
-  app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
-  app.use(cors());
-  if (process.env.NODE_ENV !== 'test') app.use(morgan('dev'));
+  // Security headers. The policy lists exactly what the app loads: its own
+  // scripts and styles, plus Google Fonts (index.css and SettingsContext).
+  // No inline scripts and no eval; the Vite build emits none.
+  app.use(helmet({
+    crossOriginEmbedderPolicy: false,
+    contentSecurityPolicy: {
+      useDefaults: false,
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+        fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
+        imgSrc: ["'self'", 'data:', 'blob:'],
+        connectSrc: ["'self'"],
+        objectSrc: ["'none'"],
+        baseUri: ["'self'"],
+        formAction: ["'self'"],
+        frameAncestors: ["'self'"],
+      },
+    },
+  }));
+  // CORS is off by default: the web app is served from the same origin, so no
+  // other website may call the API from a browser. Only origins listed in
+  // CORS_ORIGINS (comma-separated) receive CORS headers.
+  const corsOrigins = (process.env.CORS_ORIGINS || '').split(',').map(o => o.trim()).filter(Boolean);
+  app.use(cors(corsOrigins.length ? { origin: corsOrigins, credentials: true } : { origin: false }));
+  // Production logs use the standard combined format, not the developer format.
+  if (process.env.NODE_ENV !== 'test') app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
   app.use(express.json({ limit: '2mb' }));
   // Files: public only under uploads/public (branding). Everything else needs
   // a signed-in user (HttpOnly cookie for browser links, or a Bearer token).
@@ -71,7 +95,13 @@ export function createApp() {
   app.use('/api', rateLimit({ windowMs: 15 * 60 * 1000, max: 600, standardHeaders: true, legacyHeaders: false }));
   const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 50, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts, please try again later.' } });
 
-  app.get('/api/health', (req, res) => res.json({ ok: true, name: 'NITEX API' }));
+  // Health check for the load balancer and uptime monitor. It runs a real query,
+  // so a broken database returns 503 instead of a false "ok".
+  app.get('/api/health', (req, res) => {
+    let dbOk = false;
+    try { db.prepare('SELECT 1').get(); dbOk = true; } catch { dbOk = false; }
+    res.status(dbOk ? 200 : 503).json({ ok: dbOk, db: dbOk, name: 'NITEX API', uptime_s: Math.round(process.uptime()) });
+  });
 
   app.use('/api/auth', authLimiter, authRoutes);
   app.use('/api/subjects', subjectRoutes);

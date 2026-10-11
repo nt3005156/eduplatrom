@@ -70,9 +70,7 @@ export default function AuditLog() {
     if (actionFilter) params.set('action', actionFilter);
     if (roleFilter) params.set('role', roleFilter);
     if (statusFilter) params.set('status', statusFilter);
-    const token = localStorage.getItem('nitex_token');
-    // Direct navigation so the browser handles the file download & auth header via query isn't ideal,
-    // so we fetch + blob instead to keep the Bearer token flow consistent with the rest of the app.
+    // Fetch as a blob so the session cookie is sent and the file can be saved.
     api.get(`/audit/export?${params.toString()}`, { responseType: 'blob' }).then(({ data }) => {
       const url = window.URL.createObjectURL(new Blob([data]));
       const a = document.createElement('a');

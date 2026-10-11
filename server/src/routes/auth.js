@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import db from '../db/index.js';
-import { signToken, requireAuth, setFileCookie, clearFileCookie } from '../middleware/auth.js';
+import { signToken, requireAuth, setFileCookie, clearFileCookie, setSessionCookie, clearSessionCookie } from '../middleware/auth.js';
 import { notifyAdmins } from '../utils/notify.js';
 import { levelForXp } from '../utils/gamification.js';
 import { logAudit } from '../utils/audit.js';
@@ -116,15 +116,17 @@ router.post('/login', (req, res) => {
     level: levelForXp(user.xp || 0), streak: streakStatus(user.streak_last_date),
     pref_class_level: user.pref_class_level, pref_section: user.pref_section, pref_subject_id: user.pref_subject_id,
   };
-  const token = signToken(safeUser);
+  const token = signToken({ ...safeUser, session_version: user.session_version || 0 });
 
   logAudit(req, { module: 'auth', action: 'login', description: `${user.name} logged in`, actorOverride: safeUser });
 
+  setSessionCookie(req, res, token);
   setFileCookie(req, res, user);
   res.json({ token, user: safeUser });
 });
 
 router.post('/logout', requireAuth, (req, res) => {
+  clearSessionCookie(req, res);
   clearFileCookie(req, res);
   logAudit(req, { module: 'auth', action: 'logout', description: `${req.user.name} logged out` });
   res.json({ ok: true });

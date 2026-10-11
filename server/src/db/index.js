@@ -28,6 +28,8 @@ function addColumnIfMissing(table, column, def) {
 }
 
 addColumnIfMissing('users', 'theme_preference', "TEXT DEFAULT 'light'");
+// Bumped on password reset, disable, archive or anonymize. Tokens carry the version they were issued under.
+addColumnIfMissing('users', 'session_version', 'INTEGER DEFAULT 0');
 addColumnIfMissing('users', 'approval_status', "TEXT DEFAULT 'approved'");
 addColumnIfMissing('users', 'xp', 'INTEGER DEFAULT 0');
 addColumnIfMissing('users', 'streak_count', 'INTEGER DEFAULT 0');

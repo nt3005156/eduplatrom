@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom';
 import { BookOpen, ClipboardCheck, Award, TrendingUp, Clock, Sparkles, ArrowRight, FileText, Video, LinkIcon } from 'lucide-react';
 import api from '../../api/client.js';
 import AppLayout from '../../components/AppLayout.jsx';
-import AdSlot from '../../components/AdSlot.jsx';
 import { Skeleton, SkeletonCard, SkeletonRow } from '../../components/Skeleton.jsx';
 import XpBar from '../../components/XpBar.jsx';
 import StreakFlame from '../../components/StreakFlame.jsx';
@@ -180,9 +179,6 @@ export default function StudentDashboard() {
               );
             })}
             {data.recommendations.length === 0 && <div className="text-dim text-sm">Explore more materials to get personalized picks!</div>}
-          </div>
-          <div style={{ marginTop: 16 }}>
-            <AdSlot />
           </div>
         </div>
       </div>

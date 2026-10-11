@@ -205,3 +205,11 @@ client/            React 19 + Vite + React Router
   will automatically run the necessary schema migrations (including a safe
   table-rebuild for the `teacher` role and the expanded assignment/quiz
   status values) without losing any existing data.
+
+## Phase 0 deployment notes
+
+- Sessions are HttpOnly cookies that last 8 hours. Admin password resets, disabling and archiving end a user's sessions immediately. Everyone signs in once after the upgrade.
+- The API accepts no cross-origin browser calls by default. To allow another site, set `CORS_ORIGINS` (comma-separated).
+- Passwords need at least 12 characters.
+- Docker: `docker compose up --build` after copying `.env.example` to `.env`.
+- Health check: `GET /api/health` (returns 503 if the database is unreachable).

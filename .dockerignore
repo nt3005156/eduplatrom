@@ -1,0 +1,12 @@
+.git
+**/node_modules
+**/dist
+**/*.db
+**/*.db-shm
+**/*.db-wal
+server/src/uploads
+docs
+e2e
+.env
+.env.*
+!.env.example

@@ -11,13 +11,14 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const token = localStorage.getItem('nitex_token');
-    if (!token) { setLoading(false); return; }
+    // Tokens saved by older builds are no longer used. Remove them.
+    localStorage.removeItem('nitex_token');
+    // The session cookie is checked by the server. A stored profile alone proves nothing.
+    if (!localStorage.getItem('nitex_user')) { setLoading(false); return; }
     api.get('/auth/me').then(({ data }) => {
       setUser(data.user);
       localStorage.setItem('nitex_user', JSON.stringify(data.user));
     }).catch(() => {
-      localStorage.removeItem('nitex_token');
       localStorage.removeItem('nitex_user');
       setUser(null);
     }).finally(() => setLoading(false));
@@ -25,7 +26,6 @@ export function AuthProvider({ children }) {
 
   const login = async (email, password) => {
     const { data } = await api.post('/auth/login', { email, password });
-    localStorage.setItem('nitex_token', data.token);
     localStorage.setItem('nitex_user', JSON.stringify(data.user));
     setUser(data.user);
     return data.user;
@@ -38,10 +38,9 @@ export function AuthProvider({ children }) {
     return data; // { pending: true, user }
   };
 
-  const logout = () => {
-    // Best-effort audit log of the logout event; never block clearing local session on it.
-    api.post('/auth/logout').catch(() => {});
-    localStorage.removeItem('nitex_token');
+  const logout = async () => {
+    // The server clears the session cookie and writes the audit entry. Local state is cleared even if the call fails.
+    await api.post('/auth/logout').catch(() => {});
     localStorage.removeItem('nitex_user');
     setUser(null);
   };
