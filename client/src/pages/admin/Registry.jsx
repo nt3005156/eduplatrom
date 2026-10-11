@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Search, Check, X, Clock3, GitCompare, History, Archive, ArchiveRestore } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { Search, Check, X, GitCompare, History, Archive, ArchiveRestore } from 'lucide-react';
 import api from '../../api/client.js';
 import AppLayout from '../../components/AppLayout.jsx';
 import Modal from '../../components/Modal.jsx';
@@ -139,14 +139,14 @@ export default function Registry() {
   const [viewingHistory, setViewingHistory] = useState(null);
   const [confirmArchive, setConfirmArchive] = useState(null);
 
-  const load = () => {
+  const load = useCallback(() => {
     const params = new URLSearchParams();
     if (statusFilter) params.set('status', statusFilter);
     if (classFilter) params.set('class_level', classFilter);
     if (search) params.set('search', search);
     api.get(`/applications?${params.toString()}`).then(({ data }) => setApplications(data.applications));
-  };
-  useEffect(() => { load(); }, [statusFilter, classFilter, search]);
+  }, [statusFilter, classFilter, search]);
+  useEffect(() => { load(); }, [load]);
 
   const approve = async (app) => {
     try {

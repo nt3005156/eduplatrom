@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { useSettings } from '../context/SettingsContext.jsx';
 import { FacebookIcon, TwitterIcon, InstagramIcon, YoutubeIcon, LinkedinIcon } from './SocialIcons.jsx';
 
@@ -11,6 +12,7 @@ const SOCIALS = [
 
 /** A compact footer for the full-screen auth pages (login/register) where the full multi-column Footer would look out of place. */
 export default function AuthFooterStrip() {
+  const { t } = useTranslation('common');
   const { settings } = useSettings();
   if (!settings) return null;
   const activeSocials = SOCIALS.filter(([key]) => settings[key]);
@@ -26,7 +28,7 @@ export default function AuthFooterStrip() {
           ))}
         </div>
       )}
-      <div className="text-xs text-dim">© {new Date().getFullYear()} {settings.site_name}. All rights reserved.</div>
+      <div className="text-xs text-dim">{t('footer.rights', { year: new Date().getFullYear(), site: settings.site_name })}</div>
     </div>
   );
 }

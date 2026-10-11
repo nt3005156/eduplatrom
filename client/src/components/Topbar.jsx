@@ -1,10 +1,8 @@
 import { Menu } from 'lucide-react';
-import { useAuth } from '../context/AuthContext.jsx';
 import ThemeToggle from './ThemeToggle.jsx';
 import NotificationBell from './NotificationBell.jsx';
 
 export default function Topbar({ title, subtitle, onMenuClick }) {
-  const { user } = useAuth();
   return (
     <div
       className="app-topbar"

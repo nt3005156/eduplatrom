@@ -1,15 +1,18 @@
 import { Sun, Moon } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { useSettings } from '../context/SettingsContext.jsx';
 
 export default function ThemeToggle({ compact = false }) {
+  const { t } = useTranslation('common');
   const { theme, toggleTheme } = useSettings();
   const isDark = theme === 'dark';
+  const label = isDark ? t('theme.toLight') : t('theme.toDark');
 
   return (
     <button
       onClick={toggleTheme}
-      aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-      title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+      aria-label={label}
+      title={label}
       style={{
         position: 'relative', width: compact ? 40 : 52, height: compact ? 22 : 28, borderRadius: 999,
         border: '1.5px solid var(--border)', background: 'var(--surface-2)',

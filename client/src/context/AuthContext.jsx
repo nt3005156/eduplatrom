@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 import api from '../api/client.js';
+import { applyLanguage } from '../i18n/index.js';
 
 const AuthContext = createContext(null);
 
@@ -18,6 +19,8 @@ export function AuthProvider({ children }) {
     api.get('/auth/me').then(({ data }) => {
       setUser(data.user);
       localStorage.setItem('nitex_user', JSON.stringify(data.user));
+      // A saved account language overrides this device's choice. An unset value keeps the device choice.
+      if (data.user?.language) applyLanguage(data.user.language);
     }).catch(() => {
       localStorage.removeItem('nitex_user');
       setUser(null);
@@ -28,6 +31,7 @@ export function AuthProvider({ children }) {
     const { data } = await api.post('/auth/login', { email, password });
     localStorage.setItem('nitex_user', JSON.stringify(data.user));
     setUser(data.user);
+    if (data.user?.language) applyLanguage(data.user.language);
     return data.user;
   };
 

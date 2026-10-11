@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Plus, Trash2, FileText, Video, LinkIcon, UploadCloud, X } from 'lucide-react';
 import api from '../../api/client.js';
 import AppLayout from '../../components/AppLayout.jsx';
@@ -187,12 +187,12 @@ export default function ManageContent() {
   const [confirmSubjectDelete, setConfirmSubjectDelete] = useState(null);
   const [confirmMaterialDelete, setConfirmMaterialDelete] = useState(null);
 
-  const loadSubjects = () => api.get(`/subjects/class/${classLevel}`).then(({ data }) => {
+  const loadSubjects = useCallback(() => api.get(`/subjects/class/${classLevel}`).then(({ data }) => {
     setSubjects(data.subjects);
     setActiveSubject(prev => data.subjects.find(s => s.id === prev?.id) || data.subjects[0] || null);
-  });
+  }), [classLevel]);
 
-  useEffect(() => { loadSubjects(); }, [classLevel]);
+  useEffect(() => { loadSubjects(); }, [loadSubjects]);
   useEffect(() => {
     if (activeSubject) api.get(`/materials/subject/${activeSubject.id}`).then(({ data }) => setMaterials(data.materials));
     else setMaterials([]);

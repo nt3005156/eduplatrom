@@ -355,3 +355,12 @@ textarea.input{ resize: vertical; min-height: 90px; }
 @media (prefers-reduced-motion: reduce){
   .flame-icon-active, .flame-icon-risk.flame-pulse-warn, .level-badge-celebrate, .confetti-piece{ animation: none !important; }
 }
+
+/* Nepali interface. Inline brand font variables from SettingsContext win over :root,
+   so the Devanagari face is applied to the elements directly. Latin brand names keep their brand font inline. */
+html[lang="ne"] body{
+  font-family: 'Noto Sans Devanagari', system-ui, -apple-system, sans-serif;
+}
+html[lang="ne"] h1, html[lang="ne"] h2, html[lang="ne"] h3, html[lang="ne"] h4, html[lang="ne"] h5, html[lang="ne"] .display{
+  font-family: 'Noto Sans Devanagari', system-ui, -apple-system, sans-serif;
+}

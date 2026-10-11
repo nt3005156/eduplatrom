@@ -1,0 +1,65 @@
+{
+  "layout": {
+    "portal": "Parent portal"
+  },
+  "home": {
+    "hello": "Hello, {{name}}",
+    "there": "there",
+    "yourChildren": "Your children",
+    "myProfile": "My profile",
+    "loadError": "Could not load your children.",
+    "loading": "Loading...",
+    "noChildren": "No children are linked to your account yet. Please contact the school office.",
+    "last30": "Last 30 days",
+    "hidden": "Hidden",
+    "openAttendance": "Open attendance for {{name}}",
+    "attendance": "Attendance",
+    "classSection": "Class {{classLevel}} · Section {{section}}",
+    "classSectionRoll": "Class {{classLevel}} · Section {{section}} · Roll {{roll}}",
+    "announcements": "School announcements",
+    "noAnnouncements": "No announcements yet."
+  },
+  "fees": {
+    "region": "Fee account updates",
+    "feeAccountFor": "Fee account for",
+    "yourChild": "your child",
+    "creditOnAccount": "Credit on account",
+    "gotIt": "Got it",
+    "markAria": "Mark this notice for {{name}} as read",
+    "markFailed": "Could not mark this notice as read. Please try again."
+  },
+  "attendance": {
+    "title": "Attendance",
+    "loadFailed": "Could not load attendance.",
+    "openFailed": "Could not open this child.",
+    "from": "From",
+    "to": "To",
+    "daily": "Daily attendance",
+    "schoolDays_one": "{{count}} school day recorded",
+    "schoolDays_other": "{{count}} school days recorded",
+    "bySubject": "By subject",
+    "classes_one": "{{count}} class",
+    "classes_other": "{{count}} classes",
+    "dayByDay": "Day by day",
+    "noRecords": "No attendance recorded in this period.",
+    "status": {
+      "present": "Present",
+      "absent": "Absent",
+      "late": "Late",
+      "excused": "Excused",
+      "half_day": "Half day"
+    }
+  },
+  "profile": {
+    "title": "My profile",
+    "name": "Name",
+    "signInEmail": "Sign-in email",
+    "phone": "Phone",
+    "notOnFile": "Not on file",
+    "verified": "Verified",
+    "notVerified": "Not verified yet",
+    "contactNote": "To change your name, email, or phone number, contact the school office.",
+    "loading": "Loading…",
+    "loadFailed": "Could not load your profile."
+  }
+}

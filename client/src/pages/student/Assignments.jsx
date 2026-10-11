@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Clock, CheckCircle2, Upload, FileDown, ListTodo, History, RotateCcw, AlertCircle,
-  ExternalLink, X, TrendingUp,
+  ExternalLink, TrendingUp,
 } from 'lucide-react';
 import DOMPurify from 'dompurify';
 import api from '../../api/client.js';
@@ -342,11 +342,11 @@ export default function Assignments() {
   const [active, setActive] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  const load = () => {
+  const load = useCallback(() => {
     api.get(`/assignments/class/${user.class_level}`).then(({ data }) => { setAssignments(data.assignments); setLoading(false); });
     api.get(`/subjects/class/${user.class_level}`).then(({ data }) => setSubjects(data.subjects));
-  };
-  useEffect(() => { load(); }, [user.class_level]);
+  }, [user.class_level]);
+  useEffect(() => { load(); }, [load]);
 
   const filtered = useMemo(
     () => activeSubject === 'all' ? assignments : assignments.filter(a => a.subject_id === activeSubject),

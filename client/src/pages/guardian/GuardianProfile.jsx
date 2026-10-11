@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Mail, Phone, ShieldCheck } from 'lucide-react';
 import api from '../../api/client.js';
 import GuardianLayout from './GuardianLayout.jsx';
@@ -6,39 +7,40 @@ import GuardianLayout from './GuardianLayout.jsx';
 // Read-only in Phase 1. Changing a phone number needs verification (Phase 2), and the school edits
 // contact details for now. Shows only the guardian's own record.
 export default function GuardianProfile() {
+  const { t } = useTranslation('guardian');
   const [guardian, setGuardian] = useState(null);
-  const [error, setError] = useState('');
+  const [error, setError] = useState(null); // { text: server message, key: fallback translation key }
 
   useEffect(() => {
     api.get('/guardian/profile')
       .then(({ data }) => setGuardian(data.guardian))
-      .catch(err => setError(err.response?.data?.error || 'Could not load your profile.'));
+      .catch(err => setError({ text: err.response?.data?.error, key: 'profile.loadFailed' }));
   }, []);
 
   return (
-    <GuardianLayout title="My profile" back="/guardian">
-      {error && <p role="alert" className="card card-pad" style={{ color: 'var(--danger)' }}>{error}</p>}
-      {!guardian && !error && <p className="text-dim">Loading…</p>}
+    <GuardianLayout title={t('profile.title')} back="/guardian">
+      {error && <p role="alert" className="card card-pad" style={{ color: 'var(--danger)' }}>{error.text || t(error.key)}</p>}
+      {!guardian && !error && <p className="text-dim">{t('profile.loading')}</p>}
       {guardian && (
         <div className="card card-pad" style={{ display: 'grid', gap: 14 }}>
           <div>
-            <div className="text-dim text-sm">Name</div>
+            <div className="text-dim text-sm">{t('profile.name')}</div>
             <div style={{ fontWeight: 600, fontSize: 17 }}>{guardian.name}</div>
           </div>
           <div>
-            <div className="text-dim text-sm"><Mail size={13} style={{ verticalAlign: '-2px' }} /> Sign-in email</div>
+            <div className="text-dim text-sm"><Mail size={13} style={{ verticalAlign: '-2px' }} /> {t('profile.signInEmail')}</div>
             <div style={{ wordBreak: 'break-all' }}>{guardian.email}</div>
           </div>
           <div>
-            <div className="text-dim text-sm"><Phone size={13} style={{ verticalAlign: '-2px' }} /> Phone</div>
-            <div>{guardian.phone || 'Not on file'}</div>
+            <div className="text-dim text-sm"><Phone size={13} style={{ verticalAlign: '-2px' }} /> {t('profile.phone')}</div>
+            <div>{guardian.phone || t('profile.notOnFile')}</div>
             {guardian.phone && (
               <div className="text-faint" style={{ fontSize: 12 }}>
-                <ShieldCheck size={12} style={{ verticalAlign: '-2px' }} /> {guardian.phone_verified ? 'Verified' : 'Not verified yet'}
+                <ShieldCheck size={12} style={{ verticalAlign: '-2px' }} /> {guardian.phone_verified ? t('profile.verified') : t('profile.notVerified')}
               </div>
             )}
           </div>
-          <p className="text-dim text-sm">To change your name, email, or phone number, contact the school office.</p>
+          <p className="text-dim text-sm">{t('profile.contactNote')}</p>
         </div>
       )}
     </GuardianLayout>

@@ -30,7 +30,7 @@ const router = Router();
 
 const SAFE_FIELDS = `id, name, email, role, class_level, section, gender, avatar_color, theme_preference,
   approval_status, account_status, staff_role, xp, streak_count, longest_streak, streak_last_date,
-  pref_class_level, pref_section, pref_subject_id`;
+  pref_class_level, pref_section, pref_subject_id, language`;
 
 function streakStatus(streakLastDate) {
   const today = schoolDate();
@@ -219,6 +219,18 @@ router.get('/me', requireAuth, (req, res) => {
   const user = db.prepare(`SELECT ${SAFE_FIELDS} FROM users WHERE id = ?`).get(req.user.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
   setFileCookie(req, res, { id: user.id, role: user.role });
+  res.json({ user: { ...user, level: levelForXp(user.xp || 0), streak: streakStatus(user.streak_last_date), gamification_enabled: gamificationEligible(user.id) } });
+});
+
+// Phase 5: the user's interface language. Only the languages the UI ships with are accepted.
+export const UI_LANGUAGES = ['en', 'ne'];
+router.put('/me/language', requireAuth, (req, res) => {
+  const lang = req.body?.language;
+  if (lang !== null && !UI_LANGUAGES.includes(lang)) {
+    return res.status(400).json({ error: 'language must be en or ne' });
+  }
+  db.prepare('UPDATE users SET language = ? WHERE id = ?').run(lang, req.user.id);
+  const user = db.prepare(`SELECT ${SAFE_FIELDS} FROM users WHERE id = ?`).get(req.user.id);
   res.json({ user: { ...user, level: levelForXp(user.xp || 0), streak: streakStatus(user.streak_last_date), gamification_enabled: gamificationEligible(user.id) } });
 });
 

@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Users, GraduationCap, School, ClipboardCheck, TrendingUp, TrendingDown,
-  CheckCircle2, XCircle, AlertTriangle, ShieldCheck, ChevronRight,
+  CheckCircle2, XCircle, ShieldCheck, ChevronRight,
 } from 'lucide-react';
 import api from '../../api/client.js';
 import AppLayout from '../../components/AppLayout.jsx';
@@ -26,7 +26,7 @@ function StatCard({ icon: Icon, label, value, color, sub }) {
   );
 }
 
-function PctBar({ pct, color = 'var(--primary)' }) {
+function PctBar({ pct }) {
   if (pct == null) return <span className="text-dim text-sm">—</span>;
   return (
     <div className="flex items-center gap-2">
@@ -163,8 +163,8 @@ function ApprovalQueue({ canDecide }) {
   const [rows, setRows] = useState(null);
   const [busyId, setBusyId] = useState(null);
 
-  const load = () => api.get(`/academic-head/approval-queue?status=${status}`).then(({ data }) => setRows(data.requests));
-  useEffect(() => { setRows(null); load(); }, [status]);
+  const load = useCallback(() => api.get(`/academic-head/approval-queue?status=${status}`).then(({ data }) => setRows(data.requests)), [status]);
+  useEffect(() => { setRows(null); load(); }, [load]);
 
   const decide = async (id, decision) => {
     setBusyId(id);

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Users, BookOpen, ClipboardList, PenSquare, AlertCircle, Trophy, ChevronDown, FileText, Video, LinkIcon, Clock, ExternalLink } from 'lucide-react';
+import { Users, BookOpen, ClipboardList, PenSquare, AlertCircle, Trophy, ChevronDown, FileText, Video, LinkIcon } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import api from '../../api/client.js';
 import AppLayout from '../../components/AppLayout.jsx';

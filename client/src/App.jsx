@@ -1,51 +1,54 @@
+import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { AuthProvider, useAuth } from './context/AuthContext.jsx';
 import { SettingsProvider } from './context/SettingsContext.jsx';
 import { ToastProvider } from './context/ToastContext.jsx';
 import { GamificationProvider } from './context/GamificationContext.jsx';
 import { PermissionProvider, usePermissions } from './context/PermissionContext.jsx';
 
-import Login from './pages/auth/Login.jsx';
-import Register from './pages/auth/Register.jsx';
+const Login = lazy(() => import('./pages/auth/Login.jsx'));
+const Register = lazy(() => import('./pages/auth/Register.jsx'));
 
-import StudentDashboard from './pages/student/Dashboard.jsx';
-import Materials from './pages/student/Materials.jsx';
-import Assignments from './pages/student/Assignments.jsx';
-import Quizzes from './pages/student/Quizzes.jsx';
-import Announcements from './pages/student/Announcements.jsx';
-import StudentAttendance from './pages/student/Attendance.jsx';
-import AdminAttendance from './pages/admin/Attendance.jsx';
+const StudentDashboard = lazy(() => import('./pages/student/Dashboard.jsx'));
+const Materials = lazy(() => import('./pages/student/Materials.jsx'));
+const Assignments = lazy(() => import('./pages/student/Assignments.jsx'));
+const Quizzes = lazy(() => import('./pages/student/Quizzes.jsx'));
+const Announcements = lazy(() => import('./pages/student/Announcements.jsx'));
+const StudentAttendance = lazy(() => import('./pages/student/Attendance.jsx'));
+const AdminAttendance = lazy(() => import('./pages/admin/Attendance.jsx'));
 
-import AdminOverview from './pages/admin/Overview.jsx';
-import ManageContent from './pages/admin/ManageContent.jsx';
-import AdminAssignments from './pages/admin/AdminAssignments.jsx';
-import AdminQuizzes from './pages/admin/AdminQuizzes.jsx';
-import AdminStudents from './pages/admin/AdminStudents.jsx';
-import AdminAnnouncements from './pages/admin/AdminAnnouncements.jsx';
-import AdminBranding from './pages/admin/AdminBranding.jsx';
-import AuditLog from './pages/admin/AuditLog.jsx';
-import AcademicSessions from './pages/admin/AcademicSessions.jsx';
-import MyPreferences from './pages/admin/MyPreferences.jsx';
-import Registry from './pages/admin/Registry.jsx';
-import TeacherManagement from './pages/admin/TeacherManagement.jsx';
-import RolesPermissions from './pages/admin/RolesPermissions.jsx';
-import QuestionBanks from './pages/admin/QuestionBanks.jsx';
-import CoordinatorDashboard from './pages/coordinator/CoordinatorDashboard.jsx';
-import AcademicHeadDashboard from './pages/academicHead/AcademicHeadDashboard.jsx';
+const AdminOverview = lazy(() => import('./pages/admin/Overview.jsx'));
+const ManageContent = lazy(() => import('./pages/admin/ManageContent.jsx'));
+const AdminAssignments = lazy(() => import('./pages/admin/AdminAssignments.jsx'));
+const AdminQuizzes = lazy(() => import('./pages/admin/AdminQuizzes.jsx'));
+const AdminStudents = lazy(() => import('./pages/admin/AdminStudents.jsx'));
+const AdminAnnouncements = lazy(() => import('./pages/admin/AdminAnnouncements.jsx'));
+const AdminBranding = lazy(() => import('./pages/admin/AdminBranding.jsx'));
+const AuditLog = lazy(() => import('./pages/admin/AuditLog.jsx'));
+const AcademicSessions = lazy(() => import('./pages/admin/AcademicSessions.jsx'));
+const MyPreferences = lazy(() => import('./pages/admin/MyPreferences.jsx'));
+const Registry = lazy(() => import('./pages/admin/Registry.jsx'));
+const TeacherManagement = lazy(() => import('./pages/admin/TeacherManagement.jsx'));
+const RolesPermissions = lazy(() => import('./pages/admin/RolesPermissions.jsx'));
+const QuestionBanks = lazy(() => import('./pages/admin/QuestionBanks.jsx'));
+const CoordinatorDashboard = lazy(() => import('./pages/coordinator/CoordinatorDashboard.jsx'));
+const AcademicHeadDashboard = lazy(() => import('./pages/academicHead/AcademicHeadDashboard.jsx'));
 import RequireAssignment from './components/RequireAssignment.jsx';
-import SetupPassword from './pages/auth/SetupPassword.jsx';
-import GuardianHome from './pages/guardian/GuardianHome.jsx';
-import ChildAttendance from './pages/guardian/ChildAttendance.jsx';
-import GuardianProfile from './pages/guardian/GuardianProfile.jsx';
-import Guardians from './pages/admin/Guardians.jsx';
-import FeeSignoff from './pages/admin/FeeSignoff.jsx';
-import Messages from './pages/admin/Messages.jsx';
-import StudentImport from './pages/admin/StudentImport.jsx';
+const SetupPassword = lazy(() => import('./pages/auth/SetupPassword.jsx'));
+const GuardianHome = lazy(() => import('./pages/guardian/GuardianHome.jsx'));
+const ChildAttendance = lazy(() => import('./pages/guardian/ChildAttendance.jsx'));
+const GuardianProfile = lazy(() => import('./pages/guardian/GuardianProfile.jsx'));
+const Guardians = lazy(() => import('./pages/admin/Guardians.jsx'));
+const FeeSignoff = lazy(() => import('./pages/admin/FeeSignoff.jsx'));
+const Messages = lazy(() => import('./pages/admin/Messages.jsx'));
+const StudentImport = lazy(() => import('./pages/admin/StudentImport.jsx'));
 
 function FullScreenLoader() {
+  const { t } = useTranslation('common');
   return (
     <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', background: 'var(--bg)' }}>
-      Loading NITEX...
+      {t('app.loading')}
     </div>
   );
 }
@@ -102,6 +105,7 @@ export default function App() {
         <SettingsProvider>
         <ToastProvider>
         <GamificationProvider>
+          <Suspense fallback={<FullScreenLoader />}>
           <Routes>
             <Route path="/" element={<HomeRedirect />} />
             <Route path="/login" element={<PublicOnlyRoute><Login /></PublicOnlyRoute>} />
@@ -143,6 +147,7 @@ export default function App() {
 
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
+          </Suspense>
         </GamificationProvider>
         </ToastProvider>
         </SettingsProvider>

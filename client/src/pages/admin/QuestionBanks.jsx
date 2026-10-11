@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
-  BookMarked, Plus, X, Trash2, Copy, Search, Upload, CheckSquare, Square, Sparkles, Pencil,
+  BookMarked, Plus, X, Trash2, Copy, Search, Upload, CheckSquare, Square, Sparkles,
 } from 'lucide-react';
 import api from '../../api/client.js';
 import AppLayout from '../../components/AppLayout.jsx';
@@ -303,17 +303,17 @@ function BankDetail({ bank, onClose, onBankChanged }) {
   const [showGenerate, setShowGenerate] = useState(false);
   const [confirmDeleteItem, setConfirmDeleteItem] = useState(null);
 
-  const load = () => {
+  const load = useCallback(() => {
     const params = new URLSearchParams();
     if (search) params.set('search', search);
     if (difficultyFilter) params.set('difficulty', difficultyFilter);
     if (topicFilter) params.set('topic', topicFilter);
     api.get(`/quizzes/question-banks/${bank.id}/items?${params.toString()}`).then(({ data }) => setItems(data.items));
-  };
-  useEffect(() => { load(); }, [bank.id, search, difficultyFilter, topicFilter]);
+  }, [bank.id, search, difficultyFilter, topicFilter]);
+  useEffect(() => { load(); }, [load]);
 
   const toggleSelect = (id) => {
-    setSelected(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
+    setSelected(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   };
   const selectAll = () => setSelected(new Set(items.map(i => i.id)));
   const clearSelection = () => setSelected(new Set());
@@ -429,12 +429,12 @@ export default function QuestionBanks() {
   const [viewing, setViewing] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
 
-  const load = () => {
+  const load = useCallback(() => {
     const params = new URLSearchParams();
     if (search) params.set('search', search);
     api.get(`/quizzes/question-banks?${params.toString()}`).then(({ data }) => setBanks(data.banks));
-  };
-  useEffect(() => { load(); }, [search]);
+  }, [search]);
+  useEffect(() => { load(); }, [load]);
 
   const duplicate = async (bank) => {
     try {

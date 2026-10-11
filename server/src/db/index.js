@@ -29,6 +29,8 @@ function addColumnIfMissing(table, column, def) {
 }
 
 addColumnIfMissing('users', 'theme_preference', "TEXT DEFAULT 'light'");
+// Phase 5: the language the user chose ('en' or 'ne'). NULL means use the school default.
+addColumnIfMissing('users', 'language', 'TEXT');
 // Phase 4: guardians may see published exam results. Existing links default to visible; restricted links still see nothing.
 addColumnIfMissing('guardian_students', 'can_view_results', 'INTEGER NOT NULL DEFAULT 1');
 // Phase 4: component minimums per grading scale, and the NG reason per mark (added after the first Phase 4 run).

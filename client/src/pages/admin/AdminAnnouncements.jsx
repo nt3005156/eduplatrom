@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Plus, Trash2, Megaphone } from 'lucide-react';
 import api from '../../api/client.js';
 import AppLayout from '../../components/AppLayout.jsx';
@@ -21,12 +21,12 @@ export default function AdminAnnouncements() {
   // Announcements page uses the global class filter purely to narrow the *viewed* list
   // (server already returns class-specific + all-class items); creating a new
   // announcement still lets the author pick its own target class independently.
-  const load = () => {
+  const load = useCallback(() => {
     const params = new URLSearchParams();
     if (classLevel) params.set('class_level', classLevel);
     api.get(`/announcements?${params.toString()}`).then(({ data }) => setItems(data.announcements));
-  };
-  useEffect(() => { load(); }, [classLevel]);
+  }, [classLevel]);
+  useEffect(() => { load(); }, [load]);
 
   const save = async (e) => {
     e.preventDefault();

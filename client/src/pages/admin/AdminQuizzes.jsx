@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Plus, Trash2, X, Copy, Archive, Pencil, BarChart3, ClipboardCheck, BookMarked } from 'lucide-react';
 import api from '../../api/client.js';
@@ -150,7 +150,7 @@ function QuizFormModal({ existing, defaultClassLevel, onClose, onSaved }) {
       setSubjects(data.subjects);
       if (!existing) setForm(f => ({ ...f, subject_id: data.subjects[0]?.id || '' }));
     });
-  }, [classLevel]);
+  }, [classLevel, existing]);
 
   useEffect(() => {
     if (existing) {
@@ -245,8 +245,8 @@ function ManualGradingModal({ quiz, onClose }) {
   const [answers, setAnswers] = useState(null);
   const [grades, setGrades] = useState({});
 
-  const loadAttempts = () => api.get(`/quizzes/${quiz.id}/pending-manual-grading`).then(({ data }) => setAttempts(data.attempts));
-  useEffect(() => { loadAttempts(); }, [quiz.id]);
+  const loadAttempts = useCallback(() => api.get(`/quizzes/${quiz.id}/pending-manual-grading`).then(({ data }) => setAttempts(data.attempts)), [quiz.id]);
+  useEffect(() => { loadAttempts(); }, [loadAttempts]);
 
   const openGrading = async (attempt) => {
     setOpenAttempt(attempt);
@@ -354,14 +354,14 @@ export default function AdminQuizzes() {
   const [analyticsFor, setAnalyticsFor] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
 
-  const load = () => {
+  const load = useCallback(() => {
     const params = new URLSearchParams();
     if (classLevel) params.set('class_level', classLevel);
     if (subjectId) params.set('subject_id', subjectId);
     if (statusFilter) params.set('status', statusFilter);
     api.get(`/quizzes?${params.toString()}`).then(({ data }) => setQuizzes(data.quizzes));
-  };
-  useEffect(() => { load(); }, [classLevel, subjectId, statusFilter]);
+  }, [classLevel, subjectId, statusFilter]);
+  useEffect(() => { load(); }, [load]);
 
   const remove = async () => {
     const q = confirmDelete;

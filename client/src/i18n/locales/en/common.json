@@ -1,0 +1,26 @@
+{
+  "app": {
+    "loading": "Loading NITEX..."
+  },
+  "language": {
+    "label": "Language",
+    "english": "English",
+    "nepali": "नेपाली",
+    "saveFailed": "Language changed on this device, but could not be saved to your account.",
+    "switchTo": "Switch language"
+  },
+  "theme": {
+    "toDark": "Switch to dark mode",
+    "toLight": "Switch to light mode"
+  },
+  "actions": {
+    "signOut": "Sign out",
+    "back": "Back",
+    "close": "Close",
+    "loading": "Loading…",
+    "retry": "Try again"
+  },
+  "footer": {
+    "rights": "© {{year}} {{site}}. All rights reserved."
+  }
+}

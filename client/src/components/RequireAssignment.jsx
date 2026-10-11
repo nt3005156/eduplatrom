@@ -17,7 +17,7 @@ import AppLayout from './AppLayout.jsx';
  * unrestricted, and not a populated list, which means they do have at
  * least one real assignment).
  */
-export default function RequireAssignment({ children, title, subtitle }) {
+export default function RequireAssignment({ children, title }) {
   const { scope, loading } = usePermissions();
   if (loading) return children;
 

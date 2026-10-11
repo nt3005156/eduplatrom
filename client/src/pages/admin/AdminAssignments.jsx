@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Plus, Trash2, FileDown, ClipboardCheck, X, Award, AlertCircle, Copy, Archive,
   Pencil, BarChart3, RotateCcw, ShieldAlert, Clock3,
@@ -43,7 +43,7 @@ function AssignmentFormModal({ existing, defaultClassLevel, onClose, onSaved }) 
       if (!existing) setForm(f => ({ ...f, subject_id: data.subjects[0]?.id || '' }));
     });
     api.get(`/settings/sections?class_level=${classLevel}`).then(({ data }) => setSections(data.sections)).catch(() => {});
-  }, [classLevel]);
+  }, [classLevel, existing]);
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
@@ -552,14 +552,14 @@ export default function AdminAssignments() {
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [submissions, setSubmissions] = useState([]);
 
-  const load = () => {
+  const load = useCallback(() => {
     const params = new URLSearchParams();
     if (classLevel) params.set('class_level', classLevel);
     if (subjectId) params.set('subject_id', subjectId);
     if (statusFilter) params.set('status', statusFilter);
     api.get(`/assignments?${params.toString()}`).then(({ data }) => setAssignments(data.assignments));
-  };
-  useEffect(() => { load(); }, [classLevel, subjectId, statusFilter]);
+  }, [classLevel, subjectId, statusFilter]);
+  useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
     if (viewing) api.get(`/assignments/${viewing.id}/submissions`).then(({ data }) => setSubmissions(data.submissions));

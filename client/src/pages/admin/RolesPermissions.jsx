@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
-  ShieldCheck, Plus, X, Check, Minus, Users, Search, Clock3, Trash2, Eye,
+  Plus, X, Check, Minus, Users, Search, Trash2, Eye,
 } from 'lucide-react';
 import api from '../../api/client.js';
 import AppLayout from '../../components/AppLayout.jsx';
@@ -86,7 +86,7 @@ function CreateRoleModal({ roles, onClose, onSaved }) {
   );
 }
 
-function PreviewModal({ role, onClose }) {
+function PreviewModal({ onClose }) {
   const [search, setSearch] = useState('');
   const [users, setUsers] = useState([]);
   const [preview, setPreview] = useState(null);
@@ -288,7 +288,7 @@ export default function RolesPermissions() {
       </div>
 
       {creating && <CreateRoleModal roles={roles} onClose={() => setCreating(false)} onSaved={(r) => { setCreating(false); load(); setSelectedRoleId(r.id); }} />}
-      {previewing && <PreviewModal role={selectedRole} onClose={() => setPreviewing(false)} />}
+      {previewing && <PreviewModal onClose={() => setPreviewing(false)} />}
       {confirmDelete && (
         <ConfirmDialog
           title={`Delete role "${confirmDelete.label}"?`}

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { PenSquare, Clock, CheckCircle2, XCircle, Trophy, RotateCcw, Eye } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { PenSquare, Clock, CheckCircle2, XCircle, Trophy, Eye } from 'lucide-react';
 import api from '../../api/client.js';
 import AppLayout from '../../components/AppLayout.jsx';
 import Modal from '../../components/Modal.jsx';
@@ -158,7 +158,7 @@ function QuizRunner({ quiz, onClose, onDone }) {
       }
       if (quiz.time_limit_min) setSecondsLeft(quiz.time_limit_min * 60);
     });
-  }, [quiz.id]);
+  }, [quiz.id, quiz.time_limit_min]);
 
   // Autosave every 8 seconds while the quiz is open.
   useEffect(() => {
@@ -309,11 +309,11 @@ export default function Quizzes() {
   const [reviewing, setReviewing] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  const load = () => {
+  const load = useCallback(() => {
     api.get(`/quizzes/class/${user.class_level}`).then(({ data }) => { setQuizzes(data.quizzes); setLoading(false); });
     api.get(`/subjects/class/${user.class_level}`).then(({ data }) => setSubjects(data.subjects));
-  };
-  useEffect(() => { load(); }, [user.class_level]);
+  }, [user.class_level]);
+  useEffect(() => { load(); }, [load]);
 
   const filtered = useMemo(
     () => activeSubject === 'all' ? quizzes : quizzes.filter(q => q.subject_id === activeSubject),

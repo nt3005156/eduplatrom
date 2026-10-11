@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Search, Plus, X, Ban, CheckCircle2, KeyRound, Layers, Trash2, Pencil, ShieldCheck,
 } from 'lucide-react';
@@ -250,14 +250,14 @@ export default function TeacherManagement() {
   const [confirmToggle, setConfirmToggle] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
 
-  const load = () => {
+  const load = useCallback(() => {
     const params = new URLSearchParams();
     if (search) params.set('search', search);
     if (roleFilter) params.set('staff_role', roleFilter);
     if (statusFilter) params.set('status', statusFilter);
     api.get(`/teachers?${params.toString()}`).then(({ data }) => { setTeachers(data.teachers); setStaffRoles(data.staff_roles); });
-  };
-  useEffect(() => { load(); }, [search, roleFilter, statusFilter]);
+  }, [search, roleFilter, statusFilter]);
+  useEffect(() => { load(); }, [load]);
 
   const upsert = (t) => {
     setTeachers(prev => {
