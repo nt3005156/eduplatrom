@@ -167,12 +167,16 @@ let transportKey = '';
 function smtpTransport() {
   const host = process.env.SMTP_HOST;
   const port = Number(process.env.SMTP_PORT || 587);
-  const key = `${host}:${port}:${process.env.SMTP_USER || ''}`;
+  // Fail closed: on 587 (STARTTLS) refuse to continue in clear text, so the SMTP password is never sent unencrypted.
+  // SMTP_ALLOW_PLAINTEXT=true is for local tests only, and is ignored in production.
+  const requireTLS = port !== 465 && !(process.env.SMTP_ALLOW_PLAINTEXT === 'true' && process.env.NODE_ENV !== 'production');
+  const key = `${host}:${port}:${process.env.SMTP_USER || ''}:${requireTLS}`;
   if (!transport || transportKey !== key) {
     transport = nodemailer.createTransport({
       host,
       port,
       secure: port === 465,
+      requireTLS,
       auth: process.env.SMTP_USER ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS || '' } : undefined,
     });
     transportKey = key;

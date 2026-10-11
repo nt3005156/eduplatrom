@@ -285,7 +285,7 @@ Dependency order: Phase 0 blocks everything. Phase 1 blocks 2, 3, 6. Phase 3 blo
 
 ### Phase 3: Fees, invoices, receipts, and online payment
 
-**Status (2026-10-11): backend complete in code and tested, including dual control for cash and bank payments, overpayment credit with automatic refund rules, tiered escalation of exceptions and overpayments (NPR 10,000 and 50,000), and the daily reconciliation job (full server suite 246 of 246). Exit gate not met:** needs a Khalti sandbox merchant account, a month of reconciled pilot data, and a first paying school. The parent payment screen, admin fee screens, dues reminders, and receipt PDF are not built. Details and the list of open items: [PHASE3_STATUS.md](PHASE3_STATUS.md).
+**Status (2026-10-11): backend complete in code and tested, including dual control for cash and bank payments, overpayment credit with automatic refund rules, tiered escalation of exceptions and overpayments (NPR 10,000 and 50,000), and the daily reconciliation job (full server suite 247 of 247). Exit gate not met:** needs a Khalti sandbox merchant account, a month of reconciled pilot data, and a first paying school. The parent payment screen, admin fee screens, dues reminders, and receipt PDF are not built. Details and the list of open items: [PHASE3_STATUS.md](PHASE3_STATUS.md).
 
 **Goal.** Collect school fees through Khalti (the first gateway, chosen by the user; eSewa is deferred as a later premium integration), record every payment, and show dues to parents. This is the feature schools pay for.
 

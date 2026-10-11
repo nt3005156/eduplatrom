@@ -48,7 +48,7 @@ Settings are per school and live in `messaging_config`, which only admins can re
 |---|---|
 | `server/test/messaging.test.js` | 28 of 28 pass. Fake provider at the adapter seam. Covers dedupe, retries, the attempt cap, permanent errors, opt-outs, quotas, the not-configured hold, corrected registers, removed links, pause, no-contact, language rendering, notices, validation, admin-only access, the Nepal-time quota boundary, retention, announcements to parents, test send, provider status, and a 1,000-message load test. |
 | `server/test/messaging-providers.test.js` | 22 of 22 pass. Sparrow, WhatsApp, and SMTP adapters against local servers. Email goes through a **real SMTP exchange** on localhost (smtp-server), including a 550 (permanent) and a 421 (transient). Checks error classes, request format, segment counts, and that secrets never appear in status output. |
-| Full server suite (`npm test`) | **143 of 143 pass** at Phase 2 close (93 from Phase 1, 50 new). Now **246 of 246** with Phase 3 (see `PHASE3_STATUS.md`). |
+| Full server suite (`npm test`) | **143 of 143 pass** at Phase 2 close (93 from Phase 1, 50 new). Now **247 of 247** with Phase 3 (see `PHASE3_STATUS.md`). |
 | Live end-to-end run | Real server on a fresh database, real HTTP, real 30-second worker, Sparrow-protocol endpoint on localhost. See section 4. |
 | Client build and lint | Build exit 0. Lint 0 errors, 37 warnings (same count as before Phase 2). |
 

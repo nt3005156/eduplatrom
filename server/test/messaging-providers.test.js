@@ -221,8 +221,16 @@ test('whatsappParam flattens newlines and limits length to 1024', () => {
 
 // ---- Email over real SMTP ---------------------------------------------------------
 function smtpEnv(extra = {}) {
-  return { MESSAGING_EMAIL_PROVIDER: 'smtp', SMTP_HOST: '127.0.0.1', SMTP_PORT: String(smtpPort), SMTP_FROM: 'NITEX <noreply@school.test>', SMTP_USER: undefined, SMTP_PASS: undefined, ...extra };
+  // The local test server does not offer STARTTLS, so it needs the test-only opt-out. The next test checks the default.
+  return { MESSAGING_EMAIL_PROVIDER: 'smtp', SMTP_HOST: '127.0.0.1', SMTP_PORT: String(smtpPort), SMTP_FROM: 'NITEX <noreply@school.test>', SMTP_USER: undefined, SMTP_PASS: undefined, SMTP_ALLOW_PLAINTEXT: 'true', ...extra };
 }
+
+test('Email: without the test opt-out, a server that does not offer STARTTLS is refused and nothing is sent', async () => {
+  const before = smtpReceived.length;
+  env(smtpEnv({ SMTP_ALLOW_PLAINTEXT: undefined }));
+  await assert.rejects(send({ channel: 'email', recipient: 'parent@school.test', subject: 'x', body: 'y' }));
+  assert.equal(smtpReceived.length, before, 'no message crossed in clear text');
+});
 
 test('Email: delivers a message through a real SMTP exchange', async () => {
   env(smtpEnv());

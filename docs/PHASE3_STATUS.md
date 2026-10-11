@@ -2,7 +2,7 @@
 
 Date: 2026-10-11. Roadmap section: [PRODUCTION_ROADMAP.md, Phase 3](PRODUCTION_ROADMAP.md#phase-3-fees-invoices-receipts-and-online-payment).
 
-**Status: backend complete in code and tested. Server suite 246 of 246 (Phase 3 tests across three files). The phase exit gate is not met.** The three controls decided on 2026-10-11 are built (section 10). The gate needs a live Khalti merchant account (sandbox end to end), a month of real fee data reconciled to the penny at a pilot school, and a first paying school. None of these can be done from this environment. The parent-facing payment screen, the admin fee screens, and the receipt PDF are not built.
+**Status: backend complete in code and tested. Server suite 247 of 247 (Phase 3 tests across three files). The phase exit gate is not met.** The three controls decided on 2026-10-11 are built (section 10). The gate needs a live Khalti merchant account (sandbox end to end), a month of real fee data reconciled to the penny at a pilot school, and a first paying school. None of these can be done from this environment. The parent-facing payment screen, the admin fee screens, and the receipt PDF are not built.
 
 Khalti is the only gateway. It stays in `none` mode (no network calls, online payment refused with 503) until `KHALTI_SECRET_KEY` is set. eSewa is deferred, as decided.
 
@@ -188,7 +188,22 @@ The user answered four questions: overpayments (credit, with a refund on request
   - `FEES_OPS_EMAILS` (System Admin and Ops): a summary. Payments, mismatch count, open count, escalations by level, provider lookup failures, and automatic refunds.
   - `FEES_SUPERVISOR_EMAILS`: medium-tier items.
   - `FEES_HEAD_FINANCE_EMAILS`: high-tier items and 48-hour items.
-- **Dispatch is recorded honestly.** Each send is a row in `fee_dispatches` with its real status: `sent`, `simulated` (email mode `log`), `held` (no provider configured, or no recipient address), or `failed` (with the error). A missing recipient list is recorded as `held`, not dropped. The email provider is `MESSAGING_EMAIL_PROVIDER` (`smtp` with the Phase 2 SMTP settings). Outside production the default is `log`, which sends nothing.
+- **Dispatch is recorded honestly.** Each send is a row in `fee_dispatches` with its real status: `sent`, `simulated` (email mode `log`), `held` (no provider configured, or no recipient address), or `failed` (with the error). A missing recipient list is recorded as `held`, not dropped. Outside production the default is `log`, which sends nothing.
+- **Email transport: Google Workspace SMTP relay** (the user's choice). Set these in the server environment, never in the repository:
+
+```
+MESSAGING_EMAIL_PROVIDER=smtp
+SMTP_HOST=smtp-relay.gmail.com
+SMTP_PORT=587
+SMTP_FROM=NITEX Fees <fees@<school-domain>>     # must be an address in a domain the relay allows
+SMTP_USER=<sending account>                     # only if SMTP AUTH is used
+SMTP_PASS=<app password>                        # only if SMTP AUTH is used
+```
+
+  - Google's relay has two ways to accept mail. **IP allowlisting** in the Workspace Admin console (send with no username or password, from the server's fixed outbound IP). Or **SMTP AUTH** with a dedicated sending account and an app password. Pick one, set it in the Admin console under the relay settings, and require TLS. Sources: [Volanea, Gmail SMTP relay setup](https://www.volanea.com/blog/gmail-smtp-relay-setup) and [Cloud Captains, Google Workspace SMTP relay](https://cloud-captains.com/en/article/how-to-configure-smtp-relay-google-workspace). Check the current Admin console labels, because they change.
+  - **TLS is required** on port 587 (STARTTLS). The transport refuses to send if the server does not offer it, so the password is never sent in clear text. `SMTP_ALLOW_PLAINTEXT=true` exists for local tests only, and it is ignored when `NODE_ENV=production`.
+  - The relay refuses a From address outside the domains the admin allowed. Use the school's domain.
+  - Not verified here: a real relay exchange. The test runs against a local SMTP server.
 - **Unhandled API errors.** The ops summary counts Khalti lookups that failed (each is an audit row, `lookup_unavailable`). Other errors are not counted.
 - **Amounts in every report** use NPR with Nepali grouping, for example `NPR 1,00,000.00` (`services/fees/money.js`).
 - **Not built:** a settlement file import (Khalti's settlement format is not known), and a bank statement feed. The settlement check runs only when a settlement list is supplied, and the report says so when it is skipped.
@@ -200,15 +215,15 @@ The user answered four questions: overpayments (credit, with a refund on request
 | `server/test/fees-controls.test.js` | **12 of 12 pass.** Cash and bank waiting for verification, the counter person cannot finalize, overpayment to credit and application to the next invoice, explicit refund rules, automatic refunds (closed account and 90 days), job window, once per date, tiered escalation (low, medium, high, overpayment), 48-hour step-up, resolution with a note. |
 | `server/test/fees.test.js` | **31 of 31 pass.** Cash and bank now finalize through verification. The concurrency test finalizes 12 cash items at once and checks that receipt numbers have no gaps. |
 | `server/test/fees-policy.test.js` | **5 of 5 pass.** NPR formatting with lakh grouping, tier boundaries and configuration, the overpayment notice wording and its link check. |
-| Full server suite (`npm test`) | **246 of 246 pass**, exit 0. |
+| Full server suite (`npm test`) | **247 of 247 pass**, exit 0. |
 | Schema | `schema.sql` executes on a fresh SQLite file: 5 tables, 4 append-only triggers. |
 
 Test note: the overpayment tests write with the real clock, so an earlier overpayment can fall on the same school date as a test run. The escalation test counts those first, so it does not depend on the date.
 
 ### 10.5 Decisions still needed from the user
 
-1. **SMTP provider for these internal reports.** The code is provider-neutral: Google Workspace SMTP, Microsoft 365 SMTP, and SendGrid, Mailgun, or SES all use the same SMTP settings. Only the env values change. Choose by your setup and expected volume. The internal reports are low-volume.
-2. **Email addresses.** Your suggested aliases are `finance.ops@`, `operations@`, and `head.finance@`, on your school domain. Send me the real domain, and an alias for the Finance Supervisor. The addresses are set in env, and none is hard-coded. Section 2 lists the variables.
+1. **School domain.** You chose Google Workspace SMTP relay. Send me the school's email domain, so the From address and the relay settings can be set. Nothing is configured yet.
+2. **Email addresses.** Your suggested aliases are `finance.ops@`, `operations@`, and `head.finance@`, on the school domain. Please also give an alias for the Finance Supervisor. These go in env (section 2). None is hard-coded.
 3. **Customer overpayment notice.** The wording and currency are set (NPR). Still open: the channel (email, SMS, or portal), whether the refund-preference link is in the first release, and approval to add the event kind to the outbox.
 4. **Staff number.** Do you want a staff or employee number on each account, printed on the receipt and in the audit trail?
 5. **Who holds `fees.verify_payment`.** Confirm the people: the lead cashier, finance officer, and finance manager, or a different set.

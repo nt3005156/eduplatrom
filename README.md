@@ -59,7 +59,7 @@ cd client && npm ci && npm run build
 cd ../server && npm ci && NODE_ENV=production JWT_SECRET=... ADMIN_EMAIL=... ADMIN_PASSWORD=... node src/index.js
 ```
 
-Tests: `cd server && npm test` (server, 246 tests) and the browser checks in `e2e/` (for example `python3 e2e/session_e2e.py`, `python3 e2e/refresh_e2e.py`) against a running server.
+Tests: `cd server && npm test` (server, 247 tests) and the browser checks in `e2e/` (for example `python3 e2e/session_e2e.py`, `python3 e2e/refresh_e2e.py`) against a running server.
 
 ## Attendance (new)
 
