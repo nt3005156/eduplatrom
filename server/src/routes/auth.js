@@ -7,6 +7,7 @@ import { levelForXp } from '../utils/gamification.js';
 import { logAudit } from '../utils/audit.js';
 import { resolveAllPermissions } from '../services/permissions.js';
 import { resolveScope, allowedClassLevels } from '../services/scope.js';
+import { findUsableSetup, completeSetup } from '../services/accountSetup.js';
 
 const router = Router();
 
@@ -100,7 +101,7 @@ router.post('/login', (req, res) => {
     });
   }
 
-  if (user.role === 'teacher' && user.account_status === 'disabled') {
+  if (user.account_status && user.account_status !== 'active') {
     logAudit(req, { module: 'auth', action: 'failed_login', description: `Login blocked — teacher account disabled`, actorOverride: { id: user.id, name: user.name, role: user.role } });
     return res.status(403).json({
       error: 'Your account has been disabled. Please contact your administrator.',
@@ -121,8 +122,30 @@ router.post('/login', (req, res) => {
   logAudit(req, { module: 'auth', action: 'login', description: `${user.name} logged in`, actorOverride: safeUser });
 
   setSessionCookie(req, res, token);
-  setFileCookie(req, res, user);
+  // Guardians never receive a file cookie: they have no file access at all (see requireFileAccess).
+  if (user.role !== 'guardian') setFileCookie(req, res, user);
   res.json({ token, user: safeUser });
+});
+
+// One-time setup link: a new guardian or student chooses a password here.
+router.get('/setup/:token', (req, res) => {
+  const row = findUsableSetup(req.params.token);
+  if (!row) return res.status(404).json({ valid: false, error: 'This link has expired or was already used. Ask the school for a new one.' });
+  res.json({ valid: true, name: row.name, role: row.role, expires_at: row.expires_at });
+});
+
+router.post('/setup', (req, res) => {
+  const { token, password } = req.body || {};
+  if (!token || !password) return res.status(400).json({ error: 'token and password are required' });
+  try {
+    const row = completeSetup(token, password);
+    logAudit(req, { module: 'auth', action: 'password_set', description: `${row.name} set a password from a setup link`, actorOverride: { id: row.user_id, name: row.name, role: row.role } });
+    res.json({ ok: true });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message });
+    console.error(e);
+    res.status(500).json({ error: 'Something went wrong. Please try again.' });
+  }
 });
 
 router.post('/logout', requireAuth, (req, res) => {

@@ -11,7 +11,8 @@
 // their actual assignments.
 import db from '../db/index.js';
 
-const UNRESTRICTED_ROLE_KEYS = new Set(['system_admin', 'academic_head']);
+// Exported so tests can pin the rule. Guardians must never be listed here.
+export const UNRESTRICTED_ROLE_KEYS = new Set(['system_admin', 'academic_head']);
 
 const getUserRole = db.prepare(`
   SELECT u.id, u.role as legacy_role, r.key as role_key
@@ -40,6 +41,14 @@ export function resolveScope(user) {
   // path returned unrestricted=true, which exposed every class to them).
   if (!roleKey) {
     return { unrestricted: false, roleKey: null, classSections: [], subjectAssignments: [], departments: [] };
+  }
+
+  // Guardians are families, not staff. They never hold a staff scope, and this
+  // check runs before the unrestricted check so a mismatched role row can never
+  // grant a guardian whole-school scope. Guardian access is decided by
+  // guardian_students links (services/guardians.js), not by this module.
+  if (roleKey === 'guardian' || user?.role === 'guardian') {
+    return { unrestricted: false, roleKey: 'guardian', classSections: [], subjectAssignments: [], departments: [] };
   }
 
   if (UNRESTRICTED_ROLE_KEYS.has(roleKey)) {

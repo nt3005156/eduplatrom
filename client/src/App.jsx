@@ -33,6 +33,11 @@ import QuestionBanks from './pages/admin/QuestionBanks.jsx';
 import CoordinatorDashboard from './pages/coordinator/CoordinatorDashboard.jsx';
 import AcademicHeadDashboard from './pages/academicHead/AcademicHeadDashboard.jsx';
 import RequireAssignment from './components/RequireAssignment.jsx';
+import SetupPassword from './pages/auth/SetupPassword.jsx';
+import GuardianHome from './pages/guardian/GuardianHome.jsx';
+import ChildAttendance from './pages/guardian/ChildAttendance.jsx';
+import Guardians from './pages/admin/Guardians.jsx';
+import StudentImport from './pages/admin/StudentImport.jsx';
 
 function FullScreenLoader() {
   return (
@@ -45,6 +50,7 @@ function FullScreenLoader() {
 function landingPathFor(user) {
   if (user?.role === 'teacher' && user?.staff_role === 'academic_head') return '/academic-head';
   if (user?.role === 'teacher' && user?.staff_role === 'coordinator') return '/coordinator';
+  if (user?.role === 'guardian') return '/guardian';
   return user?.role === 'admin' || user?.role === 'teacher' ? '/admin' : '/dashboard';
 }
 
@@ -97,6 +103,10 @@ export default function App() {
             <Route path="/" element={<HomeRedirect />} />
             <Route path="/login" element={<PublicOnlyRoute><Login /></PublicOnlyRoute>} />
             <Route path="/register" element={<PublicOnlyRoute><Register /></PublicOnlyRoute>} />
+            <Route path="/setup" element={<SetupPassword />} />
+
+            <Route path="/guardian" element={<ProtectedRoute role="guardian"><GuardianHome /></ProtectedRoute>} />
+            <Route path="/guardian/children/:studentId" element={<ProtectedRoute role="guardian"><ChildAttendance /></ProtectedRoute>} />
 
             <Route path="/dashboard" element={<ProtectedRoute role="student"><StudentDashboard /></ProtectedRoute>} />
             <Route path="/materials" element={<ProtectedRoute role="student"><Materials /></ProtectedRoute>} />
@@ -113,6 +123,8 @@ export default function App() {
             <Route path="/admin/students" element={<ProtectedRoute role={['admin', 'teacher']}><RequireAssignment title="Students"><AdminStudents /></RequireAssignment></ProtectedRoute>} />
             <Route path="/admin/attendance" element={<ProtectedRoute role={['admin', 'teacher']}><RequireAssignment title="Attendance"><AdminAttendance /></RequireAssignment></ProtectedRoute>} />
             <Route path="/admin/announcements" element={<ProtectedRoute role={['admin', 'teacher']}><RequireAssignment title="Announcements"><AdminAnnouncements /></RequireAssignment></ProtectedRoute>} />
+            <Route path="/admin/guardians" element={<ProtectedRoute role="admin"><Guardians /></ProtectedRoute>} />
+            <Route path="/admin/student-import" element={<ProtectedRoute role="admin"><StudentImport /></ProtectedRoute>} />
             <Route path="/admin/branding" element={<ProtectedRoute role="admin"><AdminBranding /></ProtectedRoute>} />
             <Route path="/admin/audit-log" element={<RequirePermissionRoute perm="audit.view"><AuditLog /></RequirePermissionRoute>} />
             <Route path="/admin/academic-sessions" element={<ProtectedRoute role="admin"><AcademicSessions /></ProtectedRoute>} />

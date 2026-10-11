@@ -79,7 +79,7 @@ export default function Login() {
     setError(''); setPendingStatus(null); setLoading(true);
     try {
       const user = await login(email, password);
-      navigate(user.role === 'admin' ? '/admin' : '/dashboard');
+      navigate(user.role === 'admin' ? '/admin' : user.role === 'guardian' ? '/guardian' : '/dashboard');
     } catch (err) {
       if (err.response?.data?.approval_status) {
         setPendingStatus(err.response.data.approval_status);

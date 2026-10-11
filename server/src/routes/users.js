@@ -3,6 +3,7 @@ import db from '../db/index.js';
 import { requireAuth, requireAdmin, revokeSessions } from '../middleware/auth.js';
 import { notifyUser } from '../utils/notify.js';
 import { logAudit } from '../utils/audit.js';
+import { normalizePhone, isIsoDate, BLOOD_GROUPS } from '../utils/validate.js';
 
 const router = Router();
 
@@ -135,5 +136,61 @@ router.put('/:id/unarchive', requireAuth, requireAdmin, (req, res) => {
 // flat /teachers endpoints that used to live here (with no section support,
 // no role tiers, no disable, no password reset) have been removed in favor
 // of that module so there is a single, complete source of truth.
+
+// Phase 1: admin edits a student's profile fields (Nepal and international identity fields).
+// Validation is the same as the bulk import. Every change is audited with before and after values.
+const PROFILE_EDITABLE = ['phone', 'dob_ad', 'dob_bs', 'address', 'admission_no', 'roll_no', 'iemis_id', 'neb_reg_no',
+  'blood_group', 'emergency_contact_name', 'emergency_contact_phone', 'gender', 'class_level', 'section'];
+router.patch('/:id/profile', requireAuth, requireAdmin, (req, res) => {
+  const student = db.prepare("SELECT * FROM users WHERE id = ? AND role = 'student'").get(Number(req.params.id));
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  const body = req.body || {};
+  const changes = {};
+  for (const key of PROFILE_EDITABLE) {
+    if (body[key] === undefined) continue;
+    let v = body[key] === '' ? null : body[key];
+    if (key === 'phone' || key === 'emergency_contact_phone') {
+      const p = normalizePhone(v);
+      if (!p.ok) return res.status(400).json({ error: p.error });
+      v = p.value;
+    } else if (key === 'dob_ad' && v !== null && !isIsoDate(v)) {
+      return res.status(400).json({ error: 'dob_ad must be YYYY-MM-DD' });
+    } else if (key === 'dob_ad' && v !== null && v > new Date().toISOString().slice(0, 10)) {
+      return res.status(400).json({ error: 'dob_ad cannot be in the future' });
+    } else if (key === 'dob_bs' && v !== null && !/^(19|20|21)\d{2}-\d{2}-\d{2}$/.test(v)) {
+      return res.status(400).json({ error: 'dob_bs must be YYYY-MM-DD in the Bikram Sambat calendar' });
+    } else if (key === 'blood_group' && v !== null && !BLOOD_GROUPS.includes(String(v).toUpperCase())) {
+      return res.status(400).json({ error: `blood_group must be one of ${BLOOD_GROUPS.join(', ')}` });
+    } else if (key === 'blood_group' && v !== null) {
+      v = String(v).toUpperCase();
+    } else if (key === 'class_level' && v !== null && (!Number.isInteger(Number(v)) || Number(v) < 6 || Number(v) > 12)) {
+      return res.status(400).json({ error: 'class_level must be 6 to 12' });
+    } else if (key === 'section' && v !== null && !/^[A-Z]{1,3}$/.test(String(v).toUpperCase())) {
+      return res.status(400).json({ error: 'section must be 1 to 3 letters' });
+    } else if (key === 'section' && v !== null) {
+      v = String(v).toUpperCase();
+    } else if (key === 'gender' && v !== null && !['male', 'female', 'other'].includes(v)) {
+      return res.status(400).json({ error: 'gender must be male, female or other' });
+    }
+    if (key === 'class_level' && v !== null) v = Number(v);
+    if (key === 'roll_no' || key === 'admission_no') {
+      const val = v === null ? null : String(v).trim();
+      if (val !== null && val.length > 20) return res.status(400).json({ error: `${key} is too long` });
+      v = val;
+      if (val && key === 'admission_no') {
+        const clash = db.prepare("SELECT id FROM users WHERE admission_no = ? AND id != ? AND account_status != 'archived'").get(val, student.id);
+        if (clash) return res.status(409).json({ error: 'This admission number belongs to another student' });
+      }
+    }
+    if (String(student[key] ?? null) !== String(v ?? null)) changes[key] = v;
+  }
+  if (Object.keys(changes).length === 0) return res.json({ student: db.prepare('SELECT * FROM users WHERE id = ?').get(student.id), changed: [] });
+  const sets = Object.keys(changes).map(k => `${k} = ?`).join(', ');
+  db.prepare(`UPDATE users SET ${sets} WHERE id = ?`).run(...Object.values(changes), student.id);
+  const previous = Object.fromEntries(Object.keys(changes).map(k => [k, student[k] ?? null]));
+  logAudit(req, { module: 'users', action: 'updated', description: `Updated profile of ${student.name}: ${Object.keys(changes).join(', ')}`,
+    previousValue: previous, newValue: changes });
+  res.json({ student: db.prepare('SELECT * FROM users WHERE id = ?').get(student.id), changed: Object.keys(changes) });
+});
 
 export default router;

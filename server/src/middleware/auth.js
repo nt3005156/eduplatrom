@@ -95,8 +95,25 @@ export function requireAuth(req, res, next) {
   if (!sessionIsCurrent(payload, acct)) {
     return res.status(401).json({ error: 'Session ended. Please sign in again.' });
   }
+  if (payload.role === 'guardian' && !guardianMayCall(req.originalUrl)) {
+    return res.status(403).json({ error: 'Guardian accounts can only use the guardian portal' });
+  }
   req.user = payload;
   next();
+}
+
+// Guardians are fenced in by an allowlist, not by hoping every staff route checks
+// the role. Anything not listed here is refused before the handler runs.
+const GUARDIAN_ALLOWED = [
+  /^\/api\/auth\//,            // sign-in, sign-out, own profile and permissions
+  /^\/api\/guardian(\/|$)/,    // the portal
+  /^\/api\/notifications(\/|$)/,
+  /^\/api\/settings(\/|$)/,    // school branding
+  /^\/api\/privacy\/me\//,    // own data export
+];
+export function guardianMayCall(originalUrl) {
+  const pathOnly = String(originalUrl || '').split('?')[0];
+  return GUARDIAN_ALLOWED.some(re => re.test(pathOnly));
 }
 
 /**
@@ -212,6 +229,8 @@ export function requireFileAccess(req, res, next) {
     if (!sessionIsCurrent(payload, acct)) {
       return res.status(401).json({ error: 'Sign in to open this file' });
     }
+    // Guardians have no file access in Phase 1: attachments are not yet scoped to a family.
+    if (payload.role === 'guardian') return res.status(403).json({ error: 'Guardian accounts cannot open school files' });
     req.user = payload;
     next();
   } catch {

@@ -10,6 +10,9 @@
 // rank: lower number = higher authority (used for escalation checks).
 export const ROLES = [
   { key: 'system_admin', label: 'System Admin', rank: 0, is_system_role: 1, description: 'Full system access across all schools.' },
+  // Guardians have no staff grants. Their access is decided by guardian_students links (services/guardians.js),
+  // so this role intentionally has no role_permissions rows: every staff permission check fails closed.
+  { key: 'guardian', label: 'Guardian / Parent', rank: 6, is_system_role: 1, description: 'Parent or guardian. Sees only linked children, read-only.' },
   { key: 'academic_head', label: 'Academic Head / Principal', rank: 1, is_system_role: 1, description: 'Highest academic authority for the whole school.' },
   { key: 'coordinator', label: 'Coordinator', rank: 2, is_system_role: 1, description: 'Academic monitoring role — mostly read-only.' },
   { key: 'exam_coordinator', label: 'Exam Coordinator', rank: 2, is_system_role: 1, description: 'Owns the examinations module school-wide.' },

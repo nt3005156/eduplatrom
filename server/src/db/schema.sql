@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS users (
   name TEXT NOT NULL,
   email TEXT UNIQUE NOT NULL,
   password_hash TEXT NOT NULL,
-  role TEXT NOT NULL CHECK(role IN ('student','teacher','admin')),
+  role TEXT NOT NULL CHECK(role IN ('student','teacher','admin','guardian')),
   class_level INTEGER, -- 6-12 for students, NULL for staff
   section TEXT, -- e.g. 'A', 'B' for students
   gender TEXT CHECK(gender IN ('male','female','other')),
@@ -696,3 +696,39 @@ CREATE INDEX IF NOT EXISTS idx_approval_requests_entity ON approval_requests(ent
 -- created in db/index.js AFTER the addColumnIfMissing migrations run, because
 -- on pre-existing databases the `status` column on assignments/quizzes/submissions
 -- may not exist yet at the time this schema.sql is first executed.
+
+-- Phase 1: guardians (parents and other responsible adults) and their links to students.
+-- A guardian sees a child only through an active row here, with the matching flag set.
+-- Access is checked in one place: services/guardians.js.
+CREATE TABLE IF NOT EXISTS guardian_students (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  guardian_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  student_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  relationship TEXT NOT NULL DEFAULT 'guardian' CHECK(relationship IN ('father','mother','guardian','grandparent','other')),
+  is_primary INTEGER NOT NULL DEFAULT 0,
+  can_view_attendance INTEGER NOT NULL DEFAULT 1,
+  can_view_fees INTEGER NOT NULL DEFAULT 0,
+  can_pay_fees INTEGER NOT NULL DEFAULT 0,
+  can_pickup INTEGER NOT NULL DEFAULT 0,
+  -- Custody or record restriction. When 1, the guardian sees nothing about this child.
+  restricted INTEGER NOT NULL DEFAULT 0,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(guardian_id, student_id)
+);
+CREATE INDEX IF NOT EXISTS idx_guardian_students_student ON guardian_students(student_id);
+CREATE INDEX IF NOT EXISTS idx_guardian_students_guardian ON guardian_students(guardian_id);
+
+-- One-time links that let a new account (guardian or student) set its own password.
+-- Only a SHA-256 hash of the token is stored.
+CREATE TABLE IF NOT EXISTS account_setup_tokens (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT UNIQUE NOT NULL,
+  expires_at TEXT NOT NULL,
+  used_at TEXT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_setup_tokens_user ON account_setup_tokens(user_id);
+

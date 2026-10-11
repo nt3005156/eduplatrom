@@ -20,7 +20,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
 
 const PROFILE_FIELDS = `id, name, email, role, class_level, section, gender, approval_status,
-  account_status, staff_role, created_at`;
+  account_status, staff_role, created_at, phone, dob_ad, dob_bs, address, admission_no, roll_no, iemis_id,
+  neb_reg_no, blood_group, emergency_contact_name, emergency_contact_phone`;
 
 /** Everything the platform holds about one person, in a portable JSON shape. */
 export function buildExport(userId) {
@@ -42,6 +43,17 @@ export function buildExport(userId) {
       FROM quiz_attempts WHERE student_id = ? ORDER BY attempted_at`).all(userId),
     notifications: db.prepare(`
       SELECT type, title, body, is_read, created_at FROM notifications WHERE user_id = ? ORDER BY created_at`).all(userId),
+    // Guardian links. A student sees who is responsible for them (names and relationship only).
+    // A guardian sees the children they are linked to, with their access flags.
+    guardian_links: db.prepare(`
+      SELECT 'child' AS direction, s.name AS person, gs.relationship, gs.can_view_attendance, gs.can_view_fees,
+             gs.can_pay_fees, gs.can_pickup, gs.restricted, gs.created_at AS link_created_at
+      FROM guardian_students gs JOIN users s ON s.id = gs.student_id WHERE gs.guardian_id = ?
+      UNION ALL
+      SELECT 'guardian' AS direction, g.name AS person, gs.relationship, gs.can_view_attendance, gs.can_view_fees,
+             gs.can_pay_fees, gs.can_pickup, gs.restricted, gs.created_at AS link_created_at
+      FROM guardian_students gs JOIN users g ON g.id = gs.guardian_id WHERE gs.student_id = ?
+      ORDER BY link_created_at`).all(userId, userId),
     // Actions this person performed (their audit trail as an actor).
     audit_trail: db.prepare(`
       SELECT module, action, description, created_at FROM audit_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT 5000`).all(userId),
@@ -97,11 +109,16 @@ router.post('/users/:id/anonymize', requireAuth, requireAdmin, (req, res) => {
       db.prepare('UPDATE submissions SET file_path = NULL, attachments = NULL WHERE id = ?').run(s.id);
     }
     db.prepare('DELETE FROM notifications WHERE user_id = ?').run(id);
+    // Guardian links in both directions, and any unused setup links, end with the person.
+    db.prepare('DELETE FROM guardian_students WHERE guardian_id = ? OR student_id = ?').run(id, id);
+    db.prepare('DELETE FROM account_setup_tokens WHERE user_id = ?').run(id);
     // Actor name on their own audit rows (the descriptions are kept for the record).
     db.prepare("UPDATE audit_logs SET user_name = 'Former user' WHERE user_id = ?").run(id);
     db.prepare(`UPDATE users SET name = ?, email = ?, password_hash = '!disabled', gender = NULL,
         avatar_color = '#B2BEC3', account_status = 'archived', pref_class_level = NULL, pref_section = NULL,
-        pref_subject_id = NULL WHERE id = ?`)
+        pref_subject_id = NULL, phone = NULL, phone_verified = 0, dob_ad = NULL, dob_bs = NULL, address = NULL,
+        admission_no = NULL, roll_no = NULL, iemis_id = NULL, neb_reg_no = NULL, blood_group = NULL,
+        emergency_contact_name = NULL, emergency_contact_phone = NULL WHERE id = ?`)
       .run(`Former ${user.role} #${id}`, `anonymized-${id}@deleted.invalid`, id);
   });
   tx();

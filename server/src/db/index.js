@@ -46,6 +46,19 @@ addColumnIfMissing('users', 'account_status', "TEXT DEFAULT 'active'");
 // Teacher Management sub-role (only meaningful when role='teacher'):
 // 'class_teacher' | 'subject_teacher' | 'coordinator' | 'exam_controller' | 'academic_head'
 addColumnIfMissing('users', 'staff_role', 'TEXT');
+// Phase 1 student and guardian profile. Nepal fields (BS dates, IEMIS, NEB) are stored as entered.
+addColumnIfMissing('users', 'phone', 'TEXT');
+addColumnIfMissing('users', 'phone_verified', 'INTEGER DEFAULT 0');
+addColumnIfMissing('users', 'dob_ad', 'TEXT');
+addColumnIfMissing('users', 'dob_bs', 'TEXT');
+addColumnIfMissing('users', 'address', 'TEXT');
+addColumnIfMissing('users', 'admission_no', 'TEXT');
+addColumnIfMissing('users', 'roll_no', 'TEXT');
+addColumnIfMissing('users', 'iemis_id', 'TEXT');
+addColumnIfMissing('users', 'neb_reg_no', 'TEXT');
+addColumnIfMissing('users', 'blood_group', 'TEXT');
+addColumnIfMissing('users', 'emergency_contact_name', 'TEXT');
+addColumnIfMissing('users', 'emergency_contact_phone', 'TEXT');
 
 addColumnIfMissing('settings', 'body_font', "TEXT DEFAULT 'Inter'");
 addColumnIfMissing('settings', 'ui_density', "TEXT DEFAULT 'comfortable'");
@@ -201,6 +214,42 @@ function tableSqlHasCheck(table, needle) {
   const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(table);
   if (!row || !row.sql) return false;
   return row.sql.includes(needle);
+}
+
+// Phase 1: add 'guardian' to users.role. SQLite cannot change a CHECK constraint in
+// place, so the table is rebuilt from its own stored definition (which keeps every
+// column, including ones added by earlier migrations). Foreign keys are switched off
+// for the rebuild, because dropping a parent table with foreign keys on would cascade
+// and delete every child row. A consistent backup is written first.
+function usersTableAllowsGuardianRole() {
+  return tableSqlHasCheck('users', "'guardian'");
+}
+if (!usersTableAllowsGuardianRole()) {
+  const backupPath = `${DB_PATH}.pre-guardian-${Date.now()}.bak`;
+  db.exec(`VACUUM INTO '${backupPath.replace(/'/g, "''")}'`);
+  const stored = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'").get().sql;
+  const rebuilt = stored
+    .replace(/^CREATE TABLE\s+("?)users\1/i, 'CREATE TABLE users_new')
+    .replace(/CHECK\s*\(\s*role\s+IN\s*\(([^)]*)\)\s*\)/i, (m, list) => `CHECK(role IN (${list}, 'guardian'))`);
+  if (!/CREATE TABLE users_new/.test(rebuilt) || !/'guardian'/.test(rebuilt)) {
+    throw new Error('Guardian migration: could not rewrite the users table definition');
+  }
+  db.pragma('foreign_keys = OFF');
+  try {
+    db.transaction(() => {
+      db.exec(rebuilt);
+      const cols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name).join(', ');
+      db.exec(`INSERT INTO users_new (${cols}) SELECT ${cols} FROM users;`);
+      db.exec('DROP TABLE users;');
+      db.exec('ALTER TABLE users_new RENAME TO users;');
+    })();
+    const broken = db.pragma('foreign_key_check');
+    if (broken.length) throw new Error(`Guardian migration left ${broken.length} broken foreign-key references`);
+  } finally {
+    db.pragma('foreign_keys = ON');
+  }
+  db.exec(schema); // recreates the users indexes that were dropped with the old table
+  console.log(`Migrated users table to support the guardian role (backup: ${backupPath})`);
 }
 
 // The submissions.status CHECK constraint on older databases only allowed

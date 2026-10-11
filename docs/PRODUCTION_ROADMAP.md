@@ -111,11 +111,11 @@ These decisions shape every phase. Each one is marked as a choice to confirm.
 
 | Decision | Recommendation | Why | Status |
 |---|---|---|---|
-| Tenancy | Shared database with `school_id` on every row (Phase 7). Enterprise customers can get a dedicated database later. | Lowest cost per school. Scope logic already exists in `scope.js`. | Confirm |
+| Tenancy | Database per school. Each school has its own database file (SQLite in Phase 7; one PostgreSQL database per school in Phase 9). A control-plane database maps host to school. | Strongest isolation: one school's query cannot reach another school's rows. Costs more per-school work (migrations, backups), which Phase 7 automates. Chosen by the user on 2026-10-11, overriding the shared-database recommendation. | Decided |
 | Database | Keep SQLite for pilots. Move to PostgreSQL in Phase 9. | SQLite is fine for a few schools. Shared multi-school load needs a server database. | Confirm |
 | Sync vs async data access | Put a data-access layer in front of `better-sqlite3` before Phase 9. | The code calls `db.prepare()` synchronously in every route. Changing the database means changing every route. | Plan |
 | Money | Store amounts as integers in minor units (paisa, cents). Never use floats. | Avoids rounding errors in fee and payment records. | Mandatory |
-| Payments in Nepal | Use eSewa or Khalti with the school as merchant of record. Do not hold school money in NITEX accounts. | Avoids taking on payment-licence obligations. Check the exact rules with counsel. | Confirm |
+| Payments in Nepal | Khalti first, with the school as merchant of record. eSewa is deferred (premium integration). Do not hold school money in NITEX accounts. | Khalti is the first gateway the user chose. Avoids payment-licence obligations. Check the exact rules with counsel. | Decided (Khalti). Counsel to confirm |
 | Payments abroad | Stripe for USD subscriptions and invoices (Phase 8). | Standard, supports invoices and tax. | Confirm |
 | Messaging | Adapter per provider (SMS, WhatsApp, email). Outbox table with retries. | Lets us swap providers without rewriting features. | Plan |
 | File storage | Phase 0–8: keep local disk with authenticated access. Phase 9: S3-compatible object storage with signed URLs. | Disk is fine for pilots. Object storage is needed for backups and scale. | Plan |
@@ -196,6 +196,8 @@ Dependency order: Phase 0 blocks everything. Phase 1 blocks 2, 3, 6. Phase 3 blo
 
 ### Phase 1: Guardian accounts and richer student profiles
 
+**Status (2026-10-11): built and tested locally, not yet pushed.** See [PHASE1_STATUS.md](PHASE1_STATUS.md) for what exists, the test results (full server suite 92 of 92; browser run 15 of 15), the parent account model assumption, and the open `/uploads` ownership gap. The 3-pilot-school exit gate is not yet met.
+
 **Goal.** Add parents and guardians as users, linked to their children, with per-child permissions. Expand the student record to what schools and IEMIS need.
 
 **Why.** Parents are the paying customer and the main user in every market. The research found that every platform has a parent portal ([MODULE_RECOMMENDATIONS.md](MODULE_RECOMMENDATIONS.md), section 3). This is blocker G14. Nepal's IEMIS requires student identity fields that the current `users` table does not hold ([MARKET_RESEARCH_AND_MODULES.md](MARKET_RESEARCH_AND_MODULES.md), section 3.4).
@@ -250,7 +252,7 @@ Dependency order: Phase 0 blocks everything. Phase 1 blocks 2, 3, 6. Phase 3 blo
 - `routes/announcements.js` gains a "send by SMS/WhatsApp" option.
 
 **What we build.**
-- `message_outbox` table: `school_id` (from Phase 7; a placeholder column now), `channel`, `recipient`, `template_id`, `body`, `status`, `attempts`, `provider_message_id`, `cost_units`, `created_at`, `sent_at`.
+- `message_outbox` table: no `school_id` column. Under database per school (Phase 7), each school's outbox lives in its own database. Columns: `channel`, `recipient`, `template_id`, `body`, `status`, `attempts`, `provider_message_id`, `cost_units`, `created_at`, `sent_at`.
 - Adapters: SMS aggregator for Nepal (provider to be chosen), WhatsApp Business API (requires approved message templates), SMTP or SES for email.
 - Background worker: retries with backoff, marks failures, honours opt-outs.
 - Per-school quota and monthly usage report (needed for billing in Phase 3).
@@ -279,7 +281,7 @@ Dependency order: Phase 0 blocks everything. Phase 1 blocks 2, 3, 6. Phase 3 blo
 
 ### Phase 3: Fees, invoices, receipts, and online payment
 
-**Goal.** Collect school fees through eSewa or Khalti, record every payment, and show dues to parents. This is the feature schools pay for.
+**Goal.** Collect school fees through Khalti (the first gateway, chosen by the user; eSewa is deferred as a later premium integration), record every payment, and show dues to parents. This is the feature schools pay for.
 
 **Why.** Fee management is in every platform's core list. In Nepal, vendors describe digital fee payment with eSewa, Khalti, ConnectIPS, and IME Pay as standard ([Nimble](https://nimble.com.np/school-college-software), [WebApp Nepal](https://webappnepal.com/service/payment-gateway)). Fee collection was ranked the top lever in `GO_TO_MARKET_PLAN.md`.
 
@@ -309,7 +311,7 @@ Dependency order: Phase 0 blocks everything. Phase 1 blocks 2, 3, 6. Phase 3 blo
 
 **Acceptance.**
 - Tests: duplicate webhook creates one payment; amount mismatch rejected; provider status check overrides a forged success; receipt numbers have no gaps under concurrent payments; concession needs approval; refund reverses cleanly and is audited.
-- Sandbox payments on eSewa or Khalti end to end, and reconciled.
+- Sandbox payments on Khalti end to end, and reconciled. eSewa is out of scope until it is scheduled.
 - Financial report reconciles to the penny with a sample month of data.
 
 **Exit gate.** First paying school collecting fees through the gateway, with a month of reconciled data.
@@ -438,47 +440,60 @@ Dependency order: Phase 0 blocks everything. Phase 1 blocks 2, 3, 6. Phase 3 blo
 
 ---
 
-### Phase 7: Multi-tenant architecture
+### Phase 7: Multi-tenant architecture (one database per school)
 
-**Goal.** One deployment serves many schools. Each school's data is isolated. Schools onboard themselves.
+**Goal.** One NITEX deployment serves many schools. Each school's data lives in its own database file. One school's rows never share a file, a table, or a connection with another school's rows. Schools onboard themselves.
 
 **Why.** Single-school deployments do not scale. `GO_TO_MARKET_PLAN.md` says one managed instance per school is fine for about 20 schools, then multi-tenant is needed. For USD 10M, a school must cost almost nothing to add. Market leaders all run multi-school systems (Infinite Campus, PowerSchool, Fedena, Toddle).
 
+The tenancy path is **database per school**. The user chose it on 2026-10-11, which overrides the earlier shared-database recommendation. The reason is isolation. In a shared database, one missed `WHERE school_id` exposes another school's data. In a database per school, the other school's rows are not in the file the connection opens. The cost is more operational work: provisioning, migrations, and backups across many files. This phase automates that work.
+
 **Linked to the current system.**
-- The RBAC scope layer (`services/scope.js`, `services/permissions.js`) already filters by user. Extend it to filter by school.
-- Every route file (about 20) and every table in `schema.sql` (38 tables) gets `school_id`.
-- `settings` is a single-school table today. It needs `school_id`.
-- Uploads path (`app.js`): per-school folders or key prefixes.
-- The existing test pattern (`security.test.js`) gets a cross-tenant test for every route.
+- The current system is single-school. `server/src/db/index.js` opens one SQLite file, and about 20 route files and services import that module-level handle. This import is the main refactor. Each request must receive its school's database handle instead.
+- `services/scope.js` and `services/permissions.js` keep deciding who may do what inside one school. They no longer need a school filter, because one database holds one school. This is simpler than the shared-database plan.
+- `settings` stays a single-row table, because each school database holds one school. The earlier plan to add `school_id` to every table is withdrawn.
+- Uploads (`app.js`, `server/src/uploads/`) move to one directory per school (for example `uploads/<school-slug>/`). This is a partial mitigation only. The ownership gap in [PHASE1_STATUS.md](PHASE1_STATUS.md), section 5, must still be fixed by checking owner and scope on every read.
+- The startup migrations in `db/index.js` (`addColumnIfMissing` and the table rebuilds) must run once per school database, with a version recorded in each file.
+- The existing test pattern (`security.test.js`) gets a cross-school test for every route.
 
 **What we build.**
-- Tenant resolution: subdomain (for example `school.nitex.app`) or custom domain, mapped to `school_id` in a middleware. Every request has `req.school`.
-- Database changes: `school_id` NOT NULL on tenant tables. Unique constraints become per-school (for example, roll number is unique within a school, not globally). Email stays globally unique because it is the login.
-- Data access rule: no query runs without a school filter. A lint rule or query helper enforces this.
-- Automated cross-tenant test generator: for every route, a user from school B must receive 403 or 404 for school A's records.
-- Migration script: existing single-school data becomes school 1.
-- Onboarding wizard: create school, set branding, import classes and sections, import staff, import students, invite guardians, configure fee heads.
-- Self-service school admin: branding, grading scales, fee structures, message templates, user roles.
-- Per-school billing record (used in Phase 8).
+- **Control-plane database.** One small database, separate from every school's data (SQLite now, PostgreSQL in Phase 9). It holds `schools` (id, slug, custom domain, region, database path, status, plan, created_at), `platform_operators`, and `provisioning_log`. It holds no student or staff data.
+- **Tenant resolution middleware.** Reads the request host (a subdomain such as `school.nitex.app`, or a custom domain), finds the school in the control plane, and attaches `req.school` and `req.db`. An unknown host returns 404 before any route runs.
+- **Connection manager.** Opens each school's database once and caches the handle. The cache has a size cap, so 1,000 schools do not exhaust file handles. Each connection sets WAL mode and foreign keys on open. Idle handles are closed.
+- **Per-school login.** Login is resolved by host, so the same email can exist in two schools. Each token carries the school id. A token from school A presented on school B's host is refused.
+- **Routing rule.** Routes and services may not import the global database handle. A lint rule enforces this, and a test fails the build if a route imports it. This rule replaces the "WHERE school_id" rule from the shared plan.
+- **Provisioning script.** Creates a school's database from the template schema, seeds roles, permissions, the default session, and default sections, and writes the control-plane row. Target: under one minute.
+- **Migration runner.** Applies pending migrations to every school database in order. It stops at the first failure and reports it. Each school's schema version is recorded.
+- **Backup and restore per school.** One school can be restored without changing any other school.
+- **Migration of the pilot data.** The existing database becomes school 1's database file, with the same content, verified by a checksum of every table.
+- **Onboarding wizard.** Create school, set branding, import classes and sections, import staff, import students, invite guardians, configure fee heads.
+- **Self-service school admin.** Branding, grading scales, fee structures, message templates, user roles.
+- **Per-school billing record (Phase 8).** Kept in the control plane, not in the school's database.
 
 **How it improves the system.**
-- Adding a school takes minutes, not a new server. This is what makes the gross margin work.
-- Schools can onboard without NITEX staff in the room.
-- Cross-tenant isolation becomes testable, which is what a serious buyer asks for.
+- Isolation is structural. The main risk of the shared plan, one missed filter, cannot expose another school's rows, because those rows are in another file.
+- A school can be backed up, restored, exported (for data portability), or deleted as one unit. Schools ask for exactly this in contracts, and it simplifies the Nepal and EU obligations in Phases 5 and 8.
+- A bad import or a corrupt file in one school does not affect any other school.
+- Adding a school is still a configuration change plus one database file. It is not a new server.
+- Trade-off: platform-wide reporting (usage, billing, cost to serve) reads control-plane counters, not school rows. Any cross-school analytics must be an explicit, opt-in aggregate job.
 
 **Acceptance.**
-- Cross-tenant tests pass for every route (no leakage in either direction).
-- Migration of the current pilot database to school 1 with zero data loss and a checksum comparison.
-- Onboarding of a new school by a non-engineer in under 60 minutes, measured in a test session.
+- Cross-school tests pass for every route. A user from school B who calls school A's host gets 401 or 404. A spy on opened database paths confirms that school A's file is never opened for that request.
+- The pilot database migrates to school 1 with zero data loss. Checksums match for every table.
+- The migration runner applies to 20 test databases. A failure on one school leaves the other 19 untouched.
+- A single school is restored from backup, and the other schools' data does not change (tested).
+- A non-engineer onboards a new school in under 60 minutes, timed in a test session.
 - Load test: 20 schools on one deployment, peak morning attendance and exam-result publish, with no page above 2 seconds (proposed target).
 
-**Exit gate.** 20 active schools on the shared deployment with no tenant-isolation incidents.
+**Exit gate.** 20 active schools, each on its own database, with zero cross-school access incidents and at least one tested single-school restore.
 
-**Effort and team.** About 10 engineer-weeks. This is the largest refactor in the plan.
+**Effort and team.** About 12 engineer-weeks. This is an estimate. The shared-database plan was 10 weeks. The extra time covers provisioning, per-school migrations, and the connection manager. The route refactor is the same size either way.
 
 **Risks.**
-- Missing one `WHERE school_id` is a data breach. Mitigate with the query helper, the generated tests, and a code review rule.
-- Email as global login can surprise schools whose staff share a family or personal email. Decide the policy before onboarding.
+- File and connection limits when hundreds of schools share one VM. Mitigate with the handle cache now, and with PostgreSQL in Phase 9, where each school becomes a database on a managed server.
+- A migration that works on school 1 and fails on school 40. Mitigate with the stop-and-report runner and a staged rollout (5 schools, then all).
+- A parent with children in two schools needs two logins. This is the Phase 1 default. A single parent identity across schools needs a central identity service. Decide this before the first multi-school parent asks (roadmap section 4).
+- Email is the login per school, so a staff member who works at two schools has two accounts. State this to schools at sale.
 
 ---
 
@@ -541,7 +556,7 @@ Dependency order: Phase 0 blocks everything. Phase 1 blocks 2, 3, 6. Phase 3 blo
 - Phase 2 outbox and Phase 3 reconciliation need background workers.
 
 **What we build.**
-- **Data layer.** Repository layer in front of every query (started in Phase 7). Then move to PostgreSQL behind it. Migrate data with a verified copy and a rollback plan. Consider this carefully: it is a large change. Alternative: keep SQLite with one database file per school (SQLite can work for many small databases). Decision needed (section 4).
+- **Data layer.** Repository layer in front of every query (started in Phase 7). Then move to PostgreSQL behind it, one school database at a time. Migrate data with a verified copy and a rollback plan. Consider this carefully: it is a large change. Alternative: keep SQLite with one database file per school (SQLite can work for many small databases). Decision needed (section 4).
 - **Files.** S3-compatible object storage with signed URLs. Keep the authentication check on every request. Lifecycle rules for deleted files.
 - **Workers.** A queue (for example pg-boss on PostgreSQL, or BullMQ with Redis) for messages, reports, PDF generation, imports, and reconciliation.
 - **Caching and CDN.** Static assets through a CDN. Long cache headers for hashed build files.
@@ -615,9 +630,9 @@ Dependency order: Phase 0 blocks everything. Phase 1 blocks 2, 3, 6. Phase 3 blo
 
 1. **Team and budget.** Planning assumes 3 engineers, 1 product and sales lead, and 1 support person. Confirm the budget and hiring plan.
 2. **Hosting.** Nepal or Singapore for Phases 0–6. Confirm, and confirm when EU and US regions are needed.
-3. **Payment gateway.** eSewa or Khalti first? Start the merchant application in Phase 0.
+3. **Payment gateway. Decided: Khalti first.** eSewa is deferred because it is a premium integration. Start the Khalti merchant application in Phase 0.
 4. **SMS and WhatsApp provider.** Start the approval process in Phase 1, because it can take weeks.
-5. **Tenancy path.** Shared database with `school_id` (recommended), or database per school. Affects Phase 7 and Phase 9.
+5. **Tenancy path. Decided: database per school** (user, 2026-10-11). The shared-database recommendation is withdrawn. Phase 7 is rewritten to match. Phase 9 moves each school to its own PostgreSQL database.
 6. **Database.** Stay on SQLite until Phase 9, or move to PostgreSQL earlier.
 7. **Gamification for pilots.** On or off by default.
 8. **Legal counsel.** Confirm a lawyer for Nepal payments and privacy (Phase 3 and 5), and for the US and EU (Phase 8).
@@ -676,7 +691,7 @@ This track starts in Phase 0 and runs in parallel.
 | Phase 1–2 | Parent alerts and guardian logins live in pilots | Weekly active parents (proposed target: 50% of guardians) |
 | Phase 3 | First paying schools collecting fees | Collection rate; paying schools |
 | Phase 4–5 | Full-year Nepal product; IEMIS export | Schools renewing for the next year |
-| Phase 7 | 20 schools on the shared deployment | Onboarding time; support tickets per school |
+| Phase 7 | 20 schools, each on its own database, on one deployment | Onboarding time; support tickets per school |
 | Phase 8 | 3 international pilots with DPA | International pilots signed |
 | Phase 10 | First district contract | Contract value |
 
@@ -693,7 +708,7 @@ Metrics to track from day one: trial-to-paid rate; monthly churn; net revenue re
 | Target needs customers that do not exist yet | Plan does not reach USD 10M | Track the ramp in section 0.4 each quarter. Adjust price and segments early |
 | Nepal private market is too small at good prices | Revenue ceiling | International track from Phase 8. Premium plans. Add-on revenue |
 | Payment provider approval takes longer than planned | Phase 3 delayed | Start applications in Phase 0 |
-| Cross-tenant data leak | Loss of trust, legal exposure | Phase 7 enforced query helper and generated tests; code review rule; external pen test |
+| Cross-school data leak | Loss of trust, legal exposure | Phase 7 per-school databases (a query cannot reach another school's rows); a rule that routes may not import the global database; generated cross-school tests; external pen test |
 | SQLite cannot keep up at scale | Slow peaks; outages | Phase 9 data layer; decision on database by Phase 7 |
 | Regulation changes (privacy, SMS, payments, IEMIS format) | Rework | Versioned rules and templates; monitor official sources; counsel review each year |
 | Key-person dependency on one engineer | Delay or outage | Documentation, code review, second engineer by Phase 2 |
