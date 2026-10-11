@@ -11,7 +11,7 @@ import db from '../../db/index.js';
 import { logAudit } from '../../utils/audit.js';
 import { resolveScope, isWithinScope } from '../scope.js';
 import { isIsoDate } from '../../utils/validate.js';
-import { validateBands, validateExamMarks, computeResult, GradingError } from './grading.js';
+import { validateBands, validateExamMarks, validateComponentMins, computeResult, summarizeResults, GradingError } from './grading.js';
 
 export class ExamError extends Error {
   constructor(status, message) {
@@ -43,7 +43,7 @@ const grading = fn => {
 // ---------- scales ----------
 
 export function listScales() {
-  const scales = db.prepare('SELECT id, name, created_at FROM grading_scales ORDER BY id').all();
+  const scales = db.prepare('SELECT id, name, theory_min_percent, internal_min_percent, created_at FROM grading_scales ORDER BY id').all();
   const bands = db.prepare('SELECT scale_id, min_percent, grade, grade_point, is_pass FROM grading_bands ORDER BY min_percent DESC').all();
   return scales.map(s => ({ ...s, bands: bands.filter(b => b.scale_id === s.id).map(({ scale_id, ...b }) => b) }));
 }
@@ -51,14 +51,16 @@ export function listScales() {
 export function createScale(req, body) {
   const name = text(body?.name, 'name', 2, 100);
   const bands = grading(() => validateBands(body?.bands));
+  const mins = grading(() => validateComponentMins(body ?? {}));
   if (db.prepare('SELECT id FROM grading_scales WHERE name = ?').get(name)) throw new ExamError(409, 'A scale with this name already exists');
   const id = db.transaction(() => {
-    const sid = Number(db.prepare('INSERT INTO grading_scales (name, created_by) VALUES (?, ?)').run(name, req.user.id).lastInsertRowid);
+    const sid = Number(db.prepare('INSERT INTO grading_scales (name, created_by, theory_min_percent, internal_min_percent) VALUES (?, ?, ?, ?)')
+      .run(name, req.user.id, mins.theory_min_percent, mins.internal_min_percent).lastInsertRowid);
     const ins = db.prepare('INSERT INTO grading_bands (scale_id, min_percent, grade, grade_point, is_pass) VALUES (?,?,?,?,?)');
     for (const b of bands) ins.run(sid, b.min_percent, b.grade, b.grade_point, b.is_pass);
     return sid;
   })();
-  logAudit(req, { module: 'exams', action: 'scale_created', description: `Created grading scale "${name}"`, newValue: { id, name, bands } });
+  logAudit(req, { module: 'exams', action: 'scale_created', description: `Created grading scale "${name}"`, newValue: { id, name, ...mins, bands } });
   return listScales().find(s => s.id === id);
 }
 
@@ -145,7 +147,10 @@ function rosterFor(exam) {
     ORDER BY section, roll_no, name`).all(exam.class_level, exam.section, exam.section);
 }
 
-const MARK_SELECT = `SELECT student_id, is_absent, theory, internal, total, percent, grade, grade_point, is_pass, updated_at FROM exam_marks WHERE exam_id = ?`;
+const MARK_SELECT = `SELECT student_id, is_absent, theory, internal, total, percent, grade, grade_point, is_pass, ng_reason, updated_at FROM exam_marks WHERE exam_id = ?`;
+
+const scaleMins = scaleId => db.prepare('SELECT theory_min_percent, internal_min_percent FROM grading_scales WHERE id = ?').get(scaleId);
+const scaleBands = scaleId => db.prepare('SELECT min_percent, grade, grade_point, is_pass FROM grading_bands WHERE scale_id = ? ORDER BY min_percent DESC').all(scaleId);
 
 export function getExam(req, id) {
   const exam = getExamRow(id);
@@ -156,8 +161,12 @@ export function getExam(req, id) {
   const students = rosterFor(exam)
     .filter(s => isWithinScope(scope, { classLevel: exam.class_level, section: s.section, subjectId: exam.subject_id }))
     .map(s => ({ ...s, mark: marks.get(s.student_id) || null }));
-  const bands = db.prepare('SELECT min_percent, grade, grade_point, is_pass FROM grading_bands WHERE scale_id = ? ORDER BY min_percent DESC').all(exam.grading_scale_id);
-  return { exam, bands, students, can_edit_marks: exam.status === 'draft' };
+  const mins = scaleMins(exam.grading_scale_id);
+  return {
+    exam, bands: scaleBands(exam.grading_scale_id),
+    component_mins: { theory_min_percent: mins.theory_min_percent, internal_min_percent: mins.internal_min_percent },
+    students, can_edit_marks: exam.status === 'draft',
+  };
 }
 
 // ---------- marks ----------
@@ -178,7 +187,8 @@ export function enterMarks(req, id, body) {
 
   const students = new Map(db.prepare(`SELECT id, name, role, class_level, section, account_status FROM users WHERE id IN (${ids.map(() => '?').join(',')})`)
     .all(...ids).map(s => [s.id, s]));
-  const bands = db.prepare('SELECT min_percent, grade, grade_point, is_pass FROM grading_bands WHERE scale_id = ? ORDER BY min_percent DESC').all(exam.grading_scale_id);
+  const bands = scaleBands(exam.grading_scale_id);
+  const mins = scaleMins(exam.grading_scale_id);
   const prev = new Map(db.prepare(`SELECT * FROM exam_marks WHERE exam_id = ? AND student_id IN (${ids.map(() => '?').join(',')})`).all(id, ...ids).map(m => [m.student_id, m]));
 
   // Validate the whole batch before writing anything.
@@ -191,29 +201,29 @@ export function enterMarks(req, id, body) {
       throw new ExamError(403, `You are not assigned to ${st.name}'s section for this subject`);
     }
     try {
-      return { student: st, result: computeResult(exam, e, bands) };
+      return { student: st, result: computeResult(exam, e, bands, mins) };
     } catch (err) {
       if (err instanceof GradingError) throw new ExamError(400, `${st.name}: ${err.message}`);
       throw err;
     }
   });
 
-  const upsert = db.prepare(`INSERT INTO exam_marks (exam_id, student_id, is_absent, theory, internal, total, percent, grade, grade_point, is_pass, entered_by, entered_by_emp_no, updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?, (SELECT employee_no FROM users WHERE id = ?), datetime('now'))
+  const upsert = db.prepare(`INSERT INTO exam_marks (exam_id, student_id, is_absent, theory, internal, total, percent, grade, grade_point, is_pass, ng_reason, entered_by, entered_by_emp_no, updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?, (SELECT employee_no FROM users WHERE id = ?), datetime('now'))
     ON CONFLICT(exam_id, student_id) DO UPDATE SET is_absent = excluded.is_absent, theory = excluded.theory, internal = excluded.internal,
       total = excluded.total, percent = excluded.percent, grade = excluded.grade, grade_point = excluded.grade_point, is_pass = excluded.is_pass,
-      entered_by = excluded.entered_by, entered_by_emp_no = excluded.entered_by_emp_no, updated_at = excluded.updated_at`);
-  const summarise = m => m ? { is_absent: m.is_absent, theory: m.theory, internal: m.internal, total: m.total, grade: m.grade } : null;
+      ng_reason = excluded.ng_reason, entered_by = excluded.entered_by, entered_by_emp_no = excluded.entered_by_emp_no, updated_at = excluded.updated_at`);
+  const summarise = m => m ? { is_absent: m.is_absent, theory: m.theory, internal: m.internal, total: m.total, grade: m.grade, ng_reason: m.ng_reason ?? null } : null;
 
   let changed = 0;
   db.transaction(() => {
     for (const p of planned) {
       const r = p.result;
       const before = prev.get(p.student.id) || null;
-      const after = { is_absent: r.absent, theory: r.theory, internal: r.internal, total: r.total, grade: r.grade };
+      const after = { is_absent: r.absent, theory: r.theory, internal: r.internal, total: r.total, grade: r.grade, ng_reason: r.ng_reason };
       const same = before && JSON.stringify(summarise(before)) === JSON.stringify(after);
       if (same) continue;
-      upsert.run(id, p.student.id, r.absent, r.theory, r.internal, r.total, r.percent, r.grade, r.grade_point, r.is_pass, req.user.id, req.user.id);
+      upsert.run(id, p.student.id, r.absent, r.theory, r.internal, r.total, r.percent, r.grade, r.grade_point, r.is_pass, r.ng_reason, req.user.id, req.user.id);
       changed++;
       logAudit(req, {
         module: 'exams', action: 'marks_saved',
@@ -258,14 +268,33 @@ export function unpublishExam(req, id, body) {
 
 // ---------- guardian view ----------
 
-/** Published results for one child. The caller checks the guardian link first. */
+/**
+ * Published results for one child, with a GPA summary per term (a marksheet is read per term).
+ * The caller checks the guardian link first.
+ */
 export function publishedResultsFor(studentId) {
-  return db.prepare(`SELECT e.id AS exam_id, t.name AS term_name, sub.name AS subject_name, e.exam_date, e.full_marks, e.theory_full, e.internal_full,
-      m.is_absent, m.theory, m.internal, m.total, m.percent, m.grade, m.grade_point, m.is_pass, e.published_at
+  const results = db.prepare(`SELECT e.id AS exam_id, t.id AS term_id, t.name AS term_name, sub.name AS subject_name, e.exam_date,
+      e.full_marks, e.theory_full, e.internal_full,
+      m.is_absent, m.theory, m.internal, m.total, m.percent, m.grade, m.grade_point, m.is_pass, m.ng_reason, e.published_at
     FROM exam_marks m
     JOIN exams e ON e.id = m.exam_id
     JOIN exam_terms t ON t.id = e.term_id
     JOIN subjects sub ON sub.id = e.subject_id
     WHERE m.student_id = ? AND e.status = 'published'
     ORDER BY t.id, sub.name`).all(studentId).map(r => ({ ...r, is_absent: !!r.is_absent, is_pass: !!r.is_pass }));
+
+  const terms = [];
+  const byTerm = new Map();
+  for (const r of results) {
+    if (!byTerm.has(r.term_id)) {
+      const t = { term_id: r.term_id, term_name: r.term_name, rows: [] };
+      byTerm.set(r.term_id, t);
+      terms.push(t);
+    }
+    byTerm.get(r.term_id).rows.push(r);
+  }
+  return {
+    results,
+    terms: terms.map(t => ({ term_id: t.term_id, term_name: t.term_name, summary: summarizeResults(t.rows) })),
+  };
 }

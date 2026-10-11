@@ -1,5 +1,5 @@
-// Phase 4 grading engine: SEE boundaries, the 75:25 split, the NG rule, absent handling,
-// validation of scales and marks, and golden files per scale.
+// Phase 4 grading engine: SEE bands, component minimums (35% theory, 40% internal), the 75:25 split,
+// absent handling, validation, the GPA summary, and golden files per scale.
 // The golden JSON files hold expected results written from the rules, not produced by the code.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -7,8 +7,8 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import {
-  SEE_BANDS, SEE_SCALE_NAME, validateBands, validateExamMarks, validateMarkInput,
-  computeResult, gradeFor, GradingError, ABSENT_GRADE,
+  SEE_BANDS, SEE_SCALE_NAME, SEE_COMPONENT_MINS, validateBands, validateExamMarks, validateMarkInput,
+  validateComponentMins, computeResult, gradeFor, summarizeResults, GradingError, ABSENT_GRADE,
 } from '../src/services/exams/grading.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -16,57 +16,110 @@ const golden = name => JSON.parse(fs.readFileSync(path.join(here, 'golden', name
 
 const SEE_EXAM = { full_marks: 100, theory_full: 75, internal_full: 25 };
 const seeBands = validateBands(SEE_BANDS);
+const seeMins = SEE_COMPONENT_MINS;
 
-// ---------- SEE boundaries (roadmap: 89.99, 90, 34.99, 35) ----------
+// ---------- SEE total bands (roadmap: 89.99, 90, 34.99, 35). Band logic only. ----------
 
-test('SEE: 89.99 is A, 90 is A+ (A+ starts at 90)', () => {
+test('band: 89.99 is A, 90 is A+ (A+ starts at 90)', () => {
   assert.equal(gradeFor(89.99, seeBands).grade, 'A');
   assert.equal(gradeFor(90, seeBands).grade, 'A+');
 });
 
-test('SEE: 34.99 is NG, 35 is D (NG is below 35)', () => {
+test('band: 34.99 is NG, 35 is D', () => {
   assert.equal(gradeFor(34.99, seeBands).grade, 'NG');
   assert.equal(gradeFor(35, seeBands).grade, 'D');
 });
 
-test('SEE: 39.99 is D and 40 is C', () => {
+test('band: 39.99 is D and 40 is C', () => {
   assert.equal(gradeFor(39.99, seeBands).grade, 'D');
   assert.equal(gradeFor(40, seeBands).grade, 'C');
 });
 
-test('SEE: NG has no grade point and is not a pass', () => {
+test('band: NG has no grade point and is not a pass', () => {
   const ng = gradeFor(10, seeBands);
   assert.equal(ng.grade, 'NG');
   assert.equal(ng.grade_point, null);
   assert.equal(ng.is_pass, 0);
 });
 
-test('NG rule: a subject under 35 fails even when the other component is high', () => {
-  // 20 theory + 14 internal = 34, so NG. Internal of 14 out of 25 is not enough to pass.
-  const r = computeResult(SEE_EXAM, { theory: 20, internal: 14 }, seeBands);
-  assert.equal(r.total, 34);
+// ---------- component minimums (Letter Grading Directive) ----------
+
+test('component gate: theory below 35% of 75 is NG even when the total is 51', () => {
+  // 26 of 75 is 34.67%, under the 35% minimum. Total 51 would be C+ without the gate.
+  const r = computeResult(SEE_EXAM, { theory: 26, internal: 25 }, seeBands, seeMins);
+  assert.equal(r.total, 51);
   assert.equal(r.grade, 'NG');
   assert.equal(r.is_pass, 0);
+  assert.equal(r.ng_reason, 'theory');
+});
+
+test('component gate: theory at exactly 35% of 75 (26.25) passes the theory minimum', () => {
+  const r = computeResult(SEE_EXAM, { theory: 26.25, internal: 10 }, seeBands, seeMins);
+  assert.equal(r.total, 36.25);
+  assert.equal(r.grade, 'D');
+  assert.equal(r.ng_reason, null);
+});
+
+test('component gate: internal below 40% of 25 is NG (9.5 fails, 10 passes)', () => {
+  const low = computeResult(SEE_EXAM, { theory: 75, internal: 9.5 }, seeBands, seeMins);
+  assert.equal(low.grade, 'NG');
+  assert.equal(low.ng_reason, 'internal');
+
+  const exact = computeResult(SEE_EXAM, { theory: 75, internal: 10 }, seeBands, seeMins);
+  assert.equal(exact.grade, 'A');
+  assert.equal(exact.ng_reason, null);
+});
+
+test('component gate: a subject with theory 20 and internal 14 is NG, reason theory', () => {
+  const r = computeResult(SEE_EXAM, { theory: 20, internal: 14 }, seeBands, seeMins);
+  assert.equal(r.total, 34);
+  assert.equal(r.grade, 'NG');
+  assert.equal(r.ng_reason, 'theory');
+});
+
+test('component gate: no minimums on the scale means no gate', () => {
+  const r = computeResult(SEE_EXAM, { theory: 26, internal: 25 }, seeBands, { theory_min_percent: null, internal_min_percent: null });
+  assert.equal(r.grade, 'C+');
+  assert.equal(r.ng_reason, null);
+});
+
+test('component gate does not apply to a non-split exam', () => {
+  const single = validateBands([{ min_percent: 0, grade: 'F', grade_point: 0, is_pass: 0 }, { min_percent: 35, grade: 'D', grade_point: 1.6, is_pass: 1 }]);
+  const r = computeResult({ full_marks: 100 }, { mark: 36 }, single, seeMins);
+  assert.equal(r.grade, 'D');
+});
+
+test('total below the lowest pass band gives reason total (non-split exam)', () => {
+  const single = validateBands([{ min_percent: 0, grade: 'F', grade_point: 0, is_pass: 0 }, { min_percent: 35, grade: 'D', grade_point: 1.6, is_pass: 1 }]);
+  const r = computeResult({ full_marks: 100 }, { mark: 20 }, single);
+  assert.equal(r.grade, 'F');
+  assert.equal(r.ng_reason, 'total');
+});
+
+test('validateComponentMins: null or 0 to 100 with at most 2 decimals', () => {
+  assert.deepEqual(validateComponentMins({}), { theory_min_percent: null, internal_min_percent: null });
+  assert.throws(() => validateComponentMins({ theory_min_percent: 101 }), /theory_min_percent/);
+  assert.throws(() => validateComponentMins({ internal_min_percent: 33.333 }), /internal_min_percent/);
 });
 
 // ---------- 75:25 split ----------
 
 test('75:25 split: theory and internal add up to the total, out of 100', () => {
-  const r = computeResult(SEE_EXAM, { theory: 60, internal: 20 }, seeBands);
+  const r = computeResult(SEE_EXAM, { theory: 60, internal: 20 }, seeBands, seeMins);
   assert.equal(r.total, 80);
   assert.equal(r.percent, 80);
   assert.equal(r.grade, 'A');
 });
 
 test('75:25 split: 67.5 + 22.5 is exactly 90 and gets A+', () => {
-  const r = computeResult(SEE_EXAM, { theory: 67.5, internal: 22.5 }, seeBands);
+  const r = computeResult(SEE_EXAM, { theory: 67.5, internal: 22.5 }, seeBands, seeMins);
   assert.equal(r.total, 90);
   assert.equal(r.grade, 'A+');
 });
 
 test('75:25 split: theory cannot exceed 75 and internal cannot exceed 25', () => {
-  assert.throws(() => computeResult(SEE_EXAM, { theory: 75.5, internal: 0 }, seeBands), GradingError);
-  assert.throws(() => computeResult(SEE_EXAM, { theory: 0, internal: 25.5 }, seeBands), GradingError);
+  assert.throws(() => computeResult(SEE_EXAM, { theory: 75.5, internal: 0 }, seeBands, seeMins), GradingError);
+  assert.throws(() => computeResult(SEE_EXAM, { theory: 0, internal: 25.5 }, seeBands, seeMins), GradingError);
 });
 
 test('split exam config: theory_full + internal_full must equal full_marks', () => {
@@ -89,12 +142,13 @@ test('non-split exam: a single mark out of full_marks', () => {
 // ---------- absent ----------
 
 test('absent is its own state: grade AB, no total, not a pass, not a band', () => {
-  const r = computeResult(SEE_EXAM, { absent: true }, seeBands);
+  const r = computeResult(SEE_EXAM, { absent: true }, seeBands, seeMins);
   assert.equal(r.absent, 1);
   assert.equal(r.total, null);
   assert.equal(r.percent, null);
   assert.equal(r.grade, ABSENT_GRADE);
   assert.equal(r.is_pass, 0);
+  assert.equal(r.ng_reason, null);
 });
 
 // ---------- mark validation ----------
@@ -106,6 +160,41 @@ test('mark validation: range, decimals, and type', () => {
   assert.throws(() => validateMarkInput(SEE_EXAM, { theory: NaN, internal: 0 }), /theory must be/);
   assert.throws(() => validateMarkInput(SEE_EXAM, { theory: 10 }), /internal must be/);
   assert.throws(() => validateMarkInput({ full_marks: 50 }, { mark: 51 }), /mark must be/);
+});
+
+// ---------- GPA summary (NG is not dropped) ----------
+
+test('summary: one NG among six A subjects gives GPA 3.09, not 3.60', () => {
+  // A plain AVG(grade_point) skips the NULL and returns 3.60. That would hide the NG.
+  const rows = [...Array(6)].map(() => ({ grade: 'A', grade_point: 3.6, is_pass: 1 }));
+  rows.push({ grade: 'NG', grade_point: null, is_pass: 0 });
+  const s = summarizeResults(rows);
+  assert.equal(s.subjects, 7);
+  assert.equal(s.ng_count, 1);
+  assert.equal(s.gpa, 3.09);
+  assert.equal(s.all_graded, false);
+});
+
+test('summary: all graded gives the mean of grade points', () => {
+  const s = summarizeResults([
+    { grade: 'A+', grade_point: 4.0, is_pass: 1 },
+    { grade: 'B', grade_point: 2.8, is_pass: 1 },
+  ]);
+  assert.equal(s.gpa, 3.4);
+  assert.equal(s.all_graded, true);
+});
+
+test('summary: an absent subject makes the GPA not computable', () => {
+  const s = summarizeResults([
+    { grade: 'A+', grade_point: 4.0, is_pass: 1 },
+    { grade: ABSENT_GRADE, grade_point: null, is_pass: 0 },
+  ]);
+  assert.equal(s.absent_count, 1);
+  assert.equal(s.gpa, null);
+});
+
+test('summary: no subjects gives no GPA', () => {
+  assert.deepEqual(summarizeResults([]), { subjects: 0, ng_count: 0, absent_count: 0, gpa: null, all_graded: false });
 });
 
 // ---------- scale validation ----------
@@ -127,54 +216,49 @@ test('validateBands: rejects duplicates, reserved grade, bad ranges, and bad fla
 });
 
 test('validateBands: sorts bands high to low', () => {
-  const out = validateBands([b2(0, 'F'), b2(60, 'C'), b2(80, 'A')]);
-  assert.deepEqual(out.map(x => x.grade), ['A', 'C', 'F']);
+  const bands = [{ min_percent: 0, grade: 'F', grade_point: 1, is_pass: 1 }, { min_percent: 60, grade: 'C', grade_point: 1, is_pass: 1 }, { min_percent: 80, grade: 'A', grade_point: 1, is_pass: 1 }];
+  assert.deepEqual(validateBands(bands).map(x => x.grade), ['A', 'C', 'F']);
 });
-function b2(min, grade) { return { min_percent: min, grade, grade_point: 1, is_pass: 1 }; }
 
 // ---------- golden files, one per scale ----------
 
-test('golden: SEE bands in the code match the golden file (any change must be deliberate)', () => {
+test('golden: SEE bands and component minimums in the code match the golden file', () => {
   const g = golden('see-2083.json');
   assert.equal(SEE_SCALE_NAME, g.scale);
   assert.deepEqual(seeBands, validateBands(g.bands));
+  assert.deepEqual(SEE_COMPONENT_MINS, g.component_mins);
 });
 
-test('golden: every SEE case matches the expected grade, grade point and pass flag', () => {
+test('golden: every SEE case matches grade, grade point, pass flag, and NG reason', () => {
   const g = golden('see-2083.json');
   const bands = validateBands(g.bands);
   for (const c of g.cases) {
-    const r = computeResult(g.exam, { theory: c.theory, internal: c.internal }, bands);
+    const r = computeResult(g.exam, { theory: c.theory, internal: c.internal }, bands, g.component_mins);
     assert.deepEqual(
-      { grade: r.grade, grade_point: r.grade_point, is_pass: r.is_pass },
-      { grade: c.grade, grade_point: c.grade_point, is_pass: c.is_pass },
+      { grade: r.grade, grade_point: r.grade_point, is_pass: r.is_pass, ng_reason: r.ng_reason },
+      { grade: c.grade, grade_point: c.grade_point, is_pass: c.is_pass, ng_reason: c.ng_reason },
       `SEE case "${c.note}" (theory ${c.theory}, internal ${c.internal})`,
     );
   }
 });
 
-test('golden: custom percentage scale (school-defined) matches its expected grades', () => {
-  const g = golden('custom-percentage.json');
+function checkMarkGolden(file) {
+  const g = golden(file);
   const bands = validateBands(g.bands);
   for (const c of g.cases) {
-    const r = computeResult(g.exam, { mark: c.mark }, bands);
+    const r = computeResult(g.exam, { mark: c.mark }, bands, g.component_mins);
     assert.deepEqual(
-      { grade: r.grade, grade_point: r.grade_point, is_pass: r.is_pass },
-      { grade: c.grade, grade_point: c.grade_point, is_pass: c.is_pass },
-      `custom case "${c.note}" (mark ${c.mark})`,
+      { grade: r.grade, grade_point: r.grade_point, is_pass: r.is_pass, ng_reason: r.ng_reason },
+      { grade: c.grade, grade_point: c.grade_point, is_pass: c.is_pass, ng_reason: c.ng_reason },
+      `${file} case "${c.note}" (mark ${c.mark})`,
     );
   }
+}
+
+test('golden: custom percentage scale (school-defined) matches its expected grades', () => {
+  checkMarkGolden('custom-percentage.json');
 });
 
 test('golden: custom scale on an out-of-50 exam is judged by percent, not raw marks', () => {
-  const g = golden('custom-percentage-out-of-50.json');
-  const bands = validateBands(g.bands);
-  for (const c of g.cases) {
-    const r = computeResult(g.exam, { mark: c.mark }, bands);
-    assert.deepEqual(
-      { grade: r.grade, grade_point: r.grade_point, is_pass: r.is_pass },
-      { grade: c.grade, grade_point: c.grade_point, is_pass: c.is_pass },
-      `out-of-50 case "${c.note}" (mark ${c.mark})`,
-    );
-  }
+  checkMarkGolden('custom-percentage-out-of-50.json');
 });

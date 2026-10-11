@@ -1054,6 +1054,9 @@ CREATE TABLE IF NOT EXISTS fee_daily_signoffs (
 CREATE TABLE IF NOT EXISTS grading_scales (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL UNIQUE,
+  -- Component minimums (percent of each component's full marks). NULL = no gate. SEE: 35 theory, 40 internal.
+  theory_min_percent REAL,
+  internal_min_percent REAL,
   created_by INTEGER REFERENCES users(id),
   created_at TEXT DEFAULT (datetime('now'))
 );
@@ -1114,6 +1117,8 @@ CREATE TABLE IF NOT EXISTS exam_marks (
   grade TEXT NOT NULL,
   grade_point REAL,
   is_pass INTEGER NOT NULL DEFAULT 0,
+  -- Why the subject is NG: 'theory' or 'internal' (component minimum), 'total' (below the lowest pass band), or NULL.
+  ng_reason TEXT,
   entered_by INTEGER REFERENCES users(id),
   entered_by_emp_no TEXT,
   updated_at TEXT DEFAULT (datetime('now')),

@@ -186,7 +186,7 @@ test('a custom scale must cover 0 to 100 and is then usable by an exam', async (
 test('subject teacher enters SEE marks for their own class, section and subject', async () => {
   const r = await call('mathT', 'PUT', `/api/exams/${examB}/marks`, { marks: [
     { student_id: ID.s1, ...splitMarks(60, 20) },   // 80 -> A
-    { student_id: ID.s2, ...splitMarks(30, 8) },    // 38 -> D
+    { student_id: ID.s2, ...splitMarks(30, 8) },    // total 38, but internal 8 is below 10 (40% of 25): NG
     { student_id: ID.s3, absent: true },            // absent
   ] });
   assert.equal(r.status, 200, JSON.stringify(r.body));
@@ -196,9 +196,12 @@ test('subject teacher enters SEE marks for their own class, section and subject'
   const byId = Object.fromEntries(view.body.students.map(s => [s.student_id, s.mark]));
   assert.equal(byId[ID.s1].grade, 'A');
   assert.equal(byId[ID.s1].total, 80);
-  assert.equal(byId[ID.s2].grade, 'D');
+  assert.equal(byId[ID.s2].total, 38);
+  assert.equal(byId[ID.s2].grade, 'NG', 'a total of 38 is still NG when internal is under its minimum');
+  assert.equal(byId[ID.s2].ng_reason, 'internal');
   assert.equal(byId[ID.s3].grade, 'AB');
   assert.equal(byId[ID.s3].is_pass, 0);
+  assert.deepEqual(view.body.component_mins, { theory_min_percent: 35, internal_min_percent: 40 });
 });
 
 test('SEE boundaries end to end: 90 is A+, 89.99 is A, 34.99 is NG (75:25 split)', async () => {
@@ -219,6 +222,7 @@ test('SEE boundaries end to end: 90 is A+, 89.99 is A, 34.99 is NG (75:25 split)
   assert.equal(s2.total, 34.99);
   assert.equal(s2.grade, 'NG');
   assert.equal(s2.is_pass, 0);
+  assert.equal(s2.ng_reason, 'theory', 'theory 24.99 is under 26.25 (35% of 75)');
 });
 
 test('a batch is all or nothing: one bad entry saves nothing', async () => {
@@ -323,6 +327,8 @@ test('guardian sees published results for a linked child, with the stored grade'
   assert.equal(r.grade, 'A+');
   assert.equal(r.grade_point, 4);
   assert.equal(r.is_pass, true);
+  assert.equal(g1.body.terms.length, 1);
+  assert.deepEqual(g1.body.terms[0].summary, { subjects: 1, ng_count: 0, absent_count: 0, gpa: 4, all_graded: true });
 });
 
 test('guardian gets nothing for a child who is not linked, or for a restricted link', async () => {

@@ -7,17 +7,18 @@
     { "min_percent": 50, "grade": "D", "grade_point": 1.0, "is_pass": 1 },
     { "min_percent": 0, "grade": "F", "grade_point": 0.0, "is_pass": 0 }
   ],
+  "component_mins": { "theory_min_percent": null, "internal_min_percent": null },
   "exam": { "full_marks": 100 },
   "cases": [
-    { "note": "zero", "mark": 0, "grade": "F", "grade_point": 0.0, "is_pass": 0 },
-    { "note": "just under D", "mark": 49.99, "grade": "F", "grade_point": 0.0, "is_pass": 0 },
-    { "note": "D starts at 50", "mark": 50, "grade": "D", "grade_point": 1.0, "is_pass": 1 },
-    { "note": "just under C", "mark": 59.99, "grade": "D", "grade_point": 1.0, "is_pass": 1 },
-    { "note": "C starts at 60", "mark": 60, "grade": "C", "grade_point": 2.0, "is_pass": 1 },
-    { "note": "just under B", "mark": 69.99, "grade": "C", "grade_point": 2.0, "is_pass": 1 },
-    { "note": "B starts at 70", "mark": 70, "grade": "B", "grade_point": 3.0, "is_pass": 1 },
-    { "note": "just under A", "mark": 79.99, "grade": "B", "grade_point": 3.0, "is_pass": 1 },
-    { "note": "A starts at 80", "mark": 80, "grade": "A", "grade_point": 4.0, "is_pass": 1 },
-    { "note": "full marks", "mark": 100, "grade": "A", "grade_point": 4.0, "is_pass": 1 }
+    { "note": "zero", "mark": 0, "grade": "F", "grade_point": 0.0, "is_pass": 0, "ng_reason": "total" },
+    { "note": "just under D", "mark": 49.99, "grade": "F", "grade_point": 0.0, "is_pass": 0, "ng_reason": "total" },
+    { "note": "D starts at 50", "mark": 50, "grade": "D", "grade_point": 1.0, "is_pass": 1, "ng_reason": null },
+    { "note": "just under C", "mark": 59.99, "grade": "D", "grade_point": 1.0, "is_pass": 1, "ng_reason": null },
+    { "note": "C starts at 60", "mark": 60, "grade": "C", "grade_point": 2.0, "is_pass": 1, "ng_reason": null },
+    { "note": "just under B", "mark": 69.99, "grade": "C", "grade_point": 2.0, "is_pass": 1, "ng_reason": null },
+    { "note": "B starts at 70", "mark": 70, "grade": "B", "grade_point": 3.0, "is_pass": 1, "ng_reason": null },
+    { "note": "just under A", "mark": 79.99, "grade": "B", "grade_point": 3.0, "is_pass": 1, "ng_reason": null },
+    { "note": "A starts at 80", "mark": 80, "grade": "A", "grade_point": 4.0, "is_pass": 1, "ng_reason": null },
+    { "note": "full marks", "mark": 100, "grade": "A", "grade_point": 4.0, "is_pass": 1, "ng_reason": null }
   ]
 }

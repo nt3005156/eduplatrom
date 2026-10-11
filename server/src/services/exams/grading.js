@@ -8,8 +8,12 @@
 //  - Percent = total / full_marks * 100, compared as entered. No rounding up.
 //    A tiny epsilon absorbs float noise (e.g. 67.5 + 22.5 computed in binary).
 //  - SEE split: theory (out of 75) + internal (out of 25) = total (out of 100).
-//  - A subject mark below the scale's pass band (NG for SEE) fails that subject.
-//    The overall result rule is a report-card concern, not this module's.
+//  - Component minimums (Letter Grading Directive): theory must reach 35% of its full marks, and
+//    internal/practical must reach 40%. Falling short of either makes the subject NG, even when the
+//    total is 35 or more. Stored per scale (theory_min_percent, internal_min_percent). NULL = no gate.
+//    Checked on the unrounded percentage, so 26.25 of 75 passes and 26 does not.
+//  - A total below the pass band (NG for SEE) also fails the subject.
+//  - Overall result and GPA across subjects are a report-card concern: see summarizeResults().
 //  - Absent is its own state (grade 'AB'), never a band. It is not a score of 0.
 
 export const ABSENT_GRADE = 'AB';
@@ -30,6 +34,10 @@ export const SEE_BANDS = Object.freeze([
 ]);
 
 export const SEE_SPLIT = Object.freeze({ theory_full: 75, internal_full: 25 });
+
+// Component minimums for SEE, in percent of each component's full marks.
+// Sources agree on 35% theory and 40% internal (10 of 25). Confirm against the 2083 directive before go-live.
+export const SEE_COMPONENT_MINS = Object.freeze({ theory_min_percent: 35, internal_min_percent: 40 });
 
 export class GradingError extends Error {
   constructor(message) {
@@ -74,6 +82,31 @@ export function validateBands(bands) {
   });
   if (!seenMin.has(0)) throw new GradingError('The scale needs a band starting at 0 so every mark has a grade');
   return out.sort((a, b) => b.min_percent - a.min_percent);
+}
+
+/** Component minimums must be null or a number from 0 to 100 with at most 2 decimals. */
+export function validateComponentMins(mins = {}) {
+  const out = {
+    theory_min_percent: mins?.theory_min_percent ?? null,
+    internal_min_percent: mins?.internal_min_percent ?? null,
+  };
+  for (const [k, v] of Object.entries(out)) {
+    if (v !== null && (!isNum(v) || v < 0 || v > 100 || !twoDp(v))) {
+      throw new GradingError(`${k} must be empty or a number from 0 to 100 with at most 2 decimals`);
+    }
+  }
+  return out;
+}
+
+/**
+ * Which component failed its minimum, or null. Only split exams have components.
+ * v is the validated mark from validateMarkInput.
+ */
+export function componentGate(exam, v, mins) {
+  if (exam.theory_full === null || exam.theory_full === undefined) return null;
+  if (mins.theory_min_percent !== null && (v.theory / exam.theory_full) * 100 + EPS < mins.theory_min_percent) return 'theory';
+  if (mins.internal_min_percent !== null && (v.internal / exam.internal_full) * 100 + EPS < mins.internal_min_percent) return 'internal';
+  return null;
 }
 
 /** Band for a percentage. Bands must be sorted high to low (validateBands does this). */
@@ -131,16 +164,42 @@ export function validateMarkInput(exam, input) {
 }
 
 /**
- * Full result for one mark row, given the exam and the scale bands.
+ * Full result for one mark row, given the exam, the scale bands, and the scale's component minimums.
  * Stored on exam_marks so report cards do not change when a scale is edited later.
+ * ng_reason: 'theory' or 'internal' (component minimum), 'total' (below the lowest pass band), or null.
  */
-export function computeResult(exam, input, bands) {
+export function computeResult(exam, input, bands, mins = {}) {
   const v = validateMarkInput(exam, input);
   if (v.absent) {
-    return { ...v, percent: null, grade: ABSENT_GRADE, grade_point: null, is_pass: 0 };
+    return { ...v, percent: null, grade: ABSENT_GRADE, grade_point: null, is_pass: 0, ng_reason: null };
   }
   const raw = (v.total / exam.full_marks) * 100;
   const band = gradeFor(raw, bands); // the band is decided on the unrounded value
+  const gate = componentGate(exam, v, validateComponentMins(mins));
   const percent = Math.round(raw * 1e4) / 1e4; // stored for display, 4 dp
-  return { ...v, percent, grade: band.grade, grade_point: band.grade_point, is_pass: band.is_pass };
+  if (gate) {
+    return { ...v, percent, grade: 'NG', grade_point: null, is_pass: 0, ng_reason: gate };
+  }
+  return {
+    ...v, percent, grade: band.grade, grade_point: band.grade_point, is_pass: band.is_pass,
+    ng_reason: band.is_pass ? null : 'total',
+  };
+}
+
+/**
+ * Summary across one student's subjects (for a marksheet or a guardian view).
+ * Deliberately not a plain AVG(grade_point): SQL AVG skips NULL, so an NG subject would
+ * silently raise the GPA. Here NG counts as 0.00, and any absent subject makes the GPA not computable.
+ * The GPA is a simple mean across subjects. Confirm the formula against the directive before go-live.
+ */
+export function summarizeResults(rows) {
+  const subjects = rows.length;
+  const ng_count = rows.filter(r => r.grade !== ABSENT_GRADE && !r.is_pass).length;
+  const absent_count = rows.filter(r => r.grade === ABSENT_GRADE).length;
+  let gpa = null;
+  if (subjects > 0 && absent_count === 0) {
+    const sum = rows.reduce((acc, r) => acc + (r.is_pass ? (r.grade_point ?? 0) : 0), 0);
+    gpa = Math.round((sum / subjects) * 100) / 100;
+  }
+  return { subjects, ng_count, absent_count, gpa, all_graded: subjects > 0 && ng_count === 0 && absent_count === 0 };
 }

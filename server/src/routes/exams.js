@@ -79,5 +79,6 @@ examsPortalRouter.get('/children/:studentId/results', requireAuth, requireGuardi
   if (!Number.isInteger(studentId) || studentId <= 0 || !accessibleLink(req.user.id, studentId, 'can_view_results')) {
     throw new ExamError(404, 'Results not found');
   }
-  res.json({ student_id: studentId, results: exams.publishedResultsFor(studentId) });
+  const { results, terms } = exams.publishedResultsFor(studentId);
+  res.json({ student_id: studentId, results, terms });
 }));
