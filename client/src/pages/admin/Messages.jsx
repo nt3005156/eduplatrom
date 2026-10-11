@@ -206,12 +206,87 @@ function Recent({ refreshKey }) {
   );
 }
 
+const MODE_TEXT = {
+  log: 'Simulated: nothing is sent',
+  none: 'Not set up: messages are held',
+  sparrow: 'Sparrow SMS (Nepal)',
+  cloud: 'WhatsApp Cloud API',
+  smtp: 'SMTP email',
+};
+
+function Providers({ status }) {
+  if (!status) return null;
+  return (
+    <div className="card card-pad" style={{ marginBottom: 16 }}>
+      <h3 style={{ marginBottom: 10 }}>Providers</h3>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+        {[['sms', 'SMS'], ['whatsapp', 'WhatsApp'], ['email', 'Email']].map(([k, label]) => {
+          const p = status[k];
+          const live = p.mode !== 'log' && p.mode !== 'none';
+          return (
+            <div key={k} className="card card-pad" style={{ padding: 12 }}>
+              <div className="text-dim text-sm">{label}</div>
+              <div style={{ fontWeight: 600, marginTop: 2 }}>{MODE_TEXT[p.mode] || p.mode}</div>
+              <div className="text-sm" style={{ marginTop: 6, color: p.configured ? '#00b894' : 'var(--text-dim)' }}>
+                {p.configured ? (live ? 'Settings present' : 'Ready') : 'Settings missing (see server settings)'}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <p className="text-dim text-sm" style={{ marginTop: 10 }}>Provider secrets are set on the server and are never shown here.</p>
+    </div>
+  );
+}
+
+function TestSend() {
+  const toast = useToast();
+  const [form, setForm] = useState({ channel: 'sms', recipient: '' });
+  const [result, setResult] = useState(null);
+  const [sending, setSending] = useState(false);
+  const send = async (e) => {
+    e.preventDefault();
+    setSending(true);
+    try {
+      const { data } = await api.post('/messages/test', form);
+      setResult(data);
+      if (data.status === 'failed') toast.error(data.error || 'The test message failed');
+      else toast.success(data.status === 'simulated' ? 'Simulated: nothing was sent to a real device' : 'Test message sent');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Could not send the test message');
+    } finally { setSending(false); }
+  };
+  return (
+    <form className="card card-pad" style={{ marginBottom: 16 }} onSubmit={send}>
+      <h3 style={{ marginBottom: 6 }}>Send a test message</h3>
+      <p className="text-dim text-sm" style={{ marginBottom: 10 }}>Check a provider before a pilot. Use your own number or address. This is not stored as an alert.</p>
+      <div className="flex gap-2" style={{ flexWrap: 'wrap' }}>
+        <select className="input" style={{ width: 130 }} value={form.channel} aria-label="Test channel" onChange={e => setForm({ ...form, channel: e.target.value })}>
+          {CHANNELS.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+        </select>
+        <input className="input" style={{ flex: 1, minWidth: 200 }} required placeholder={form.channel === 'email' ? 'name@example.com' : '98XXXXXXXX or +977…'} aria-label="Test recipient" value={form.recipient} onChange={e => setForm({ ...form, recipient: e.target.value })} />
+        <button className="btn btn-outline" disabled={sending}><Send size={14} /> {sending ? 'Sending...' : 'Send test'}</button>
+      </div>
+      {result && (
+        <div className="text-sm" style={{ marginTop: 10 }}>
+          Result: <b>{result.status}</b>{result.provider_message_id ? ` · id ${result.provider_message_id}` : ''}{result.error ? ` · ${result.error}` : ''}
+        </div>
+      )}
+    </form>
+  );
+}
+
 export default function Messages() {
   const toast = useToast();
   const [config, setConfig] = useState(null);
   const [summary, setSummary] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [processing, setProcessing] = useState(false);
+  const [providers, setProviders] = useState(null);
+
+  useEffect(() => {
+    api.get('/messages/providers').then(({ data }) => setProviders(data)).catch(() => {});
+  }, []);
 
   const loadSummary = useCallback(() => {
     api.get('/messages/summary', { params: { days: 30 } }).then(({ data }) => setSummary(data)).catch(() => {});
@@ -239,7 +314,9 @@ export default function Messages() {
         <span className="text-dim text-sm">Simulated messages are recorded but not sent until a provider is connected.</span>
         <button className="btn btn-outline btn-sm" onClick={loadSummary}><RefreshCw size={14} /> Refresh</button>
       </div>
+      <Providers status={providers} />
       {config && <Settings config={config} onSaved={setConfig} />}
+      <TestSend />
       <Summary summary={summary} onProcess={processNow} processing={processing} />
       <NoticeForm onSent={loadSummary} />
       <OptOuts />

@@ -5,6 +5,8 @@ import { notifyClass } from '../utils/notify.js';
 import { logAudit } from '../utils/audit.js';
 import { hasPermission } from '../services/permissions.js';
 import { resolveScope, isWithinScope } from '../services/scope.js';
+import { queueNotice } from '../services/messaging/alerts.js';
+import { CHANNELS } from '../services/messaging/outbox.js';
 
 const router = Router();
 
@@ -28,8 +30,20 @@ router.get('/', requireAuth, (req, res) => {
 //     requires that class to actually be within the caller's own scope —
 //     a Subject/Class Teacher can only announce to a class they teach.
 router.post('/', requireAuth, requireStaff, (req, res) => {
-  const { class_level, title, body } = req.body;
+  const { class_level, title, body, parent_channels } = req.body;
   if (!title) return res.status(400).json({ error: 'title required' });
+
+  // Optional: also send the announcement to parents by SMS, WhatsApp, or email. Validated before anything is saved.
+  let parentChannels = null;
+  if (parent_channels !== undefined && parent_channels !== null && parent_channels !== '') {
+    if (!Array.isArray(parent_channels) || parent_channels.length === 0 || parent_channels.some(c => !CHANNELS.includes(c))) {
+      return res.status(400).json({ error: 'parent_channels must be a list of sms, whatsapp, email' });
+    }
+    if (String(title).length > 100 || String(body || '').trim().length < 3 || String(body).length > 480) {
+      return res.status(400).json({ error: 'To send to parents, the title must be up to 100 characters and the body 3 to 480 characters' });
+    }
+    parentChannels = [...new Set(parent_channels)];
+  }
 
   if (!class_level) {
     if (!hasPermission(req.user, 'communication.broadcast_school')) {
@@ -58,13 +72,22 @@ router.post('/', requireAuth, requireStaff, (req, res) => {
     related_id: announcement.id,
   });
 
+  let parentNotice = null;
+  if (parentChannels) {
+    parentNotice = queueNotice({
+      class_level: class_level ? Number(class_level) : null,
+      title: String(title).trim(), body: String(body).trim(),
+      channels: parentChannels, idempotency_key: `announcement-${announcement.id}`,
+    });
+  }
+
   logAudit(req, {
     module: 'content', action: 'created',
     description: `${req.user.name} published announcement "${title}"${class_level ? ` for Class ${class_level}` : ' (all classes)'}`,
-    newValue: { title, class_level },
+    newValue: { title, class_level, parent_channels: parentChannels },
   });
 
-  res.json({ announcement });
+  res.json({ announcement, parent_messages: parentNotice });
 });
 
 router.delete('/:id', requireAuth, requireStaff, (req, res) => {

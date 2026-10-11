@@ -3,7 +3,8 @@ import { Router } from 'express';
 import db from '../db/index.js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { logAudit } from '../utils/audit.js';
-import { normalizeRecipient, getConfig, processOutbox, deliverySummary, CHANNELS } from '../services/messaging/outbox.js';
+import { normalizeRecipient, getConfig, processOutbox, deliverySummary, sendTestMessage, isOptedOut, CHANNELS } from '../services/messaging/outbox.js';
+import { providerStatus } from '../services/messaging/providers.js';
 import { queueNotice } from '../services/messaging/alerts.js';
 
 const router = Router();
@@ -128,6 +129,27 @@ router.delete('/optouts', requireAuth, requireAdmin, (req, res) => {
   db.prepare('DELETE FROM message_optouts WHERE recipient = ? AND channel = ?').run(addr.value, channel);
   logAudit(req, { module: 'messaging', action: 'updated', description: `${req.user.name} removed an opt-out for ${channel}` });
   res.json({ ok: true });
+});
+
+// Which providers are set up, without any secret values. Shown on the Messages page.
+router.get('/providers', requireAuth, requireAdmin, (req, res) => {
+  res.json(providerStatus());
+});
+
+// Sends one test message to a number or address the admin enters, so the provider can be checked before a pilot.
+router.post('/test', requireAuth, requireAdmin, async (req, res) => {
+  const channel = req.body?.channel;
+  if (!CHANNELS.includes(channel)) return res.status(400).json({ error: 'channel must be sms, whatsapp, or email' });
+  const addr = normalizeRecipient(channel, req.body?.recipient);
+  if (!addr.ok) return res.status(400).json({ error: addr.error });
+  if (!addr.value) return res.status(400).json({ error: 'recipient is required' });
+  if (isOptedOut(addr.value, channel)) return res.status(400).json({ error: 'This address has opted out of this channel' });
+  const school = db.prepare('SELECT school_name, site_name FROM settings WHERE id = 1').get() || {};
+  const body = `${school.school_name || school.site_name || 'NITEX'}: this is a test message. Parent alerts are set up correctly. No action needed.`;
+  const result = await sendTestMessage({ channel, recipient: addr.value, body });
+  logAudit(req, { module: 'messaging', action: 'created',
+    description: `${req.user.name} sent a ${channel} test message: ${result.status}` });
+  res.json({ channel, recipient: addr.value, ...result });
 });
 
 // Runs the worker now. The timer runs it every 30 seconds too.

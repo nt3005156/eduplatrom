@@ -14,6 +14,7 @@ export default function AdminAnnouncements() {
   const { classLevel, setClassLevel } = useModuleFilters();
   const [items, setItems] = useState([]);
   const [form, setForm] = useState({ title: '', body: '', class_level: '' });
+  const [parentChannels, setParentChannels] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
 
@@ -30,9 +31,12 @@ export default function AdminAnnouncements() {
   const save = async (e) => {
     e.preventDefault();
     try {
-      await api.post('/announcements', { ...form, class_level: form.class_level || null });
-      toast.success(`Announcement published — ${form.class_level ? `Class ${form.class_level}` : 'all classes'} notified`);
-      setForm({ title: '', body: '', class_level: '' }); setShowForm(false); load();
+      const payload = { ...form, class_level: form.class_level || null };
+      if (parentChannels.length) payload.parent_channels = parentChannels;
+      const { data } = await api.post('/announcements', payload);
+      const parentNote = data.parent_messages ? ` · ${data.parent_messages.queued} parent message(s) queued` : '';
+      toast.success(`Announcement published — ${form.class_level ? `Class ${form.class_level}` : 'all classes'} notified${parentNote}`);
+      setForm({ title: '', body: '', class_level: '' }); setParentChannels([]); setShowForm(false); load();
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to publish announcement');
     }
@@ -71,6 +75,20 @@ export default function AdminAnnouncements() {
             {!hasPermission('communication.broadcast_school') && (
               <div className="text-xs text-dim" style={{ marginTop: 6 }}>You can only announce to classes you are assigned to.</div>
             )}
+          </div>
+          <div className="field">
+            <label>Also send to parents</label>
+            <div className="flex gap-3" style={{ flexWrap: 'wrap' }}>
+              {[['sms', 'SMS'], ['whatsapp', 'WhatsApp'], ['email', 'Email']].map(([k, l]) => (
+                <label key={k} className="flex items-center gap-2">
+                  <input type="checkbox" checked={parentChannels.includes(k)}
+                    onChange={() => setParentChannels(parentChannels.includes(k) ? parentChannels.filter(c => c !== k) : [...parentChannels, k])} /> {l}
+                </label>
+              ))}
+            </div>
+            <div className="text-xs text-dim" style={{ marginTop: 6 }}>
+              Leave unticked for an in-app announcement only. Parent messages need a message of 3 to 480 characters and go only to guardians who may receive them.
+            </div>
           </div>
           <button className="btn btn-primary btn-block">Publish</button>
         </form>

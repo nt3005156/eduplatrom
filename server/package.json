@@ -25,5 +25,8 @@
     "nodemailer": "^10.1.0",
     "sanitize-html": "^2.17.5",
     "uuid": "^14.0.1"
+  },
+  "devDependencies": {
+    "smtp-server": "^3.19.21"
   }
 }

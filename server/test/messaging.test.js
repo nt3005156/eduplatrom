@@ -480,3 +480,96 @@ test('load: 1,000 queued messages are all sent in batches, with none lost or dup
   assert.ok(elapsed < 60_000, `1,000 messages took ${elapsed} ms`);
   console.log(`load test: 1000 messages in ${elapsed} ms with the fake provider`);
 });
+
+test('quota month starts at Nepal midnight (UTC+05:45), not UTC midnight', async () => {
+  const { monthStartUtc } = await import('../src/services/messaging/outbox.js');
+  // 2026-10-01 00:00 NPT is 2026-09-30 18:15 UTC.
+  assert.equal(monthStartUtc(new Date('2026-10-01T10:00:00Z')).toISOString(), '2026-09-30T18:15:00.000Z');
+  // 2026-09-30 23:50 NPT is still September, which is 18:05 UTC on 2026-09-30.
+  assert.equal(monthStartUtc(new Date('2026-09-30T18:05:00Z')).toISOString(), '2026-08-31T18:15:00.000Z');
+  // 2026-09-30 19:00 UTC is already 1 October 00:45 in Nepal, so the Nepal month is October while UTC is still September.
+  assert.equal(monthStartUtc(new Date('2026-09-30T19:00:00Z')).toISOString(), '2026-09-30T18:15:00.000Z');
+});
+
+test('usage counts only messages sent after the Nepal month start', async () => {
+  const { usageThisMonth } = await import('../src/services/messaging/outbox.js');
+  const now = new Date('2026-10-01T10:00:00Z');
+  const before = usageThisMonth('email', now).messages;
+  const ins = (key, sentAt) => db.prepare(`INSERT INTO message_outbox (channel, recipient, template_id, body, dedupe_key, event_kind, status, sent_at)
+    VALUES ('email', 'boundary@msg.test', 'notice.v1', 'b', ?, 'notice', 'sent', ?)`).run(key, sentAt);
+  ins('boundary-a', '2026-09-30 18:10:00'); // 23:55 on 30 Sept in Nepal: September, not counted
+  ins('boundary-b', '2026-09-30 18:20:00'); // 00:05 on 1 Oct in Nepal: counted
+  assert.equal(usageThisMonth('email', now).messages - before, 1);
+});
+
+test('retention: finished messages older than the limit are deleted; queued ones are kept', async () => {
+  const { purgeOldMessages } = await import('../src/services/messaging/outbox.js');
+  const old = (key, status) => db.prepare(`INSERT INTO message_outbox (channel, recipient, template_id, body, dedupe_key, event_kind, status, created_at)
+    VALUES ('sms', '+9779800000001', 'notice.v1', 'old', ?, 'notice', ?, datetime('now', '-400 days'))`).run(key, status);
+  old('retain-sent', 'sent');
+  old('retain-queued', 'queued');
+  const deleted = purgeOldMessages(365);
+  assert.ok(deleted >= 1);
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM message_outbox WHERE dedupe_key = 'retain-sent'").get().c, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM message_outbox WHERE dedupe_key = 'retain-queued'").get().c, 1);
+});
+
+test('announcement with parent channels queues messages for that class; invalid input saves nothing', async () => {
+  clearQueue();
+  await setConfig({ alerts_enabled: true, sms_enabled: true, email_enabled: false });
+  const sid = student(12, 'ANN');
+  const g = guardian();
+  link(g, sid);
+  const countAnn = () => db.prepare('SELECT COUNT(*) c FROM announcements').get().c;
+  const annBefore = countAnn();
+
+  const bad = await api('POST', '/api/announcements', { token: adminToken, body: { class_level: 12, title: 'Exam', body: 'Exam on Monday', parent_channels: ['fax'] } });
+  assert.equal(bad.status, 400);
+  assert.equal(countAnn(), annBefore, 'nothing published on a bad request');
+
+  const ok = await api('POST', '/api/announcements', { token: adminToken, body: { class_level: 12, title: 'Exam week', body: 'Exams start Monday. Please check the timetable.', parent_channels: ['sms'] } });
+  assert.equal(ok.status, 200, ok.text);
+  assert.equal(countAnn(), annBefore + 1);
+  assert.ok(ok.json.parent_messages.queued >= 1);
+  const row = db.prepare("SELECT status FROM message_outbox WHERE student_id IS NULL AND dedupe_key LIKE ?").get(`sms|%|notice|announcement-${ok.json.announcement.id}`);
+  assert.ok(row, 'queued with the announcement idempotency key');
+  assert.equal(row.status, 'queued');
+
+  // A plain announcement, without parent channels, sends nothing to parents.
+  const plain = await api('POST', '/api/announcements', { token: adminToken, body: { class_level: 12, title: 'Plain note', body: 'No parent message here' } });
+  assert.equal(plain.status, 200);
+  assert.equal(plain.json.parent_messages, null);
+});
+
+test('admin test send: validated, honours opt-outs, reports the provider result, and is not stored as an alert', async () => {
+  const bad = await api('POST', '/api/messages/test', { token: adminToken, body: { channel: 'sms', recipient: 'not a number' } });
+  assert.equal(bad.status, 400);
+  const none = await api('POST', '/api/messages/test', { token: adminToken, body: { channel: 'sms' } });
+  assert.equal(none.status, 400);
+
+  const phone = nepalPhone(70001);
+  await api('POST', '/api/messages/optouts', { token: adminToken, body: { channel: 'sms', recipient: phone } });
+  const opted = await api('POST', '/api/messages/test', { token: adminToken, body: { channel: 'sms', recipient: phone } });
+  assert.equal(opted.status, 400);
+  await api('DELETE', `/api/messages/optouts?channel=sms&recipient=${encodeURIComponent(phone)}`, { token: adminToken });
+
+  const outboxBefore = db.prepare('SELECT COUNT(*) c FROM message_outbox').get().c;
+  const ok = await api('POST', '/api/messages/test', { token: adminToken, body: { channel: 'sms', recipient: phone } });
+  assert.equal(ok.status, 200, ok.text);
+  // The suite's fake SMS provider is installed, so the send goes through the adapter seam and reports 'sent'.
+  assert.equal(ok.json.status, 'sent');
+  assert.ok(calls.sms.some(c => c.recipient === phone), 'the provider was called with the test recipient');
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM message_outbox').get().c, outboxBefore, 'test sends are not stored as alerts');
+
+  const student = await api('POST', '/api/messages/test', { token: studentToken, body: { channel: 'sms', recipient: phone } });
+  assert.equal(student.status, 403);
+});
+
+test('providers endpoint: admin sees modes and set-up state, never secrets', async () => {
+  const r = await api('GET', '/api/messages/providers', { token: adminToken });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.sms.mode, 'log');
+  assert.equal(typeof r.json.sms.configured, 'boolean');
+  assert.ok(!/token|password|pass/i.test(JSON.stringify(r.json).replace(/mode|configured/g, '')));
+  assert.equal((await api('GET', '/api/messages/providers', { token: studentToken })).status, 403);
+});

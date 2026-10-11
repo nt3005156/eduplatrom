@@ -57,18 +57,20 @@ export function queueAttendanceAlerts({ records, date, studentNames }) {
 }
 
 /**
- * Queues a class notice to every guardian of that class who may receive messages.
+ * Queues a notice to the guardians of one class (optionally one section), or of the whole school when
+ * class_level is null. Only guardians with a non-restricted link to an active student receive it.
  * idempotency_key stops a retried request from sending the notice twice.
  */
-export function queueNotice({ class_level, section = null, title, body, channels, idempotency_key }) {
+export function queueNotice({ class_level = null, section = null, title, body, channels, idempotency_key }) {
   const guardians = db.prepare(`
     SELECT DISTINCT u.id AS guardian_id, u.email, u.phone
     FROM guardian_students gs
       JOIN users s ON s.id = gs.student_id
       JOIN users u ON u.id = gs.guardian_id
-    WHERE s.role = 'student' AND s.account_status = 'active' AND s.class_level = ?
+    WHERE s.role = 'student' AND s.account_status = 'active'
+      AND (? IS NULL OR s.class_level = ?)
       AND (? IS NULL OR s.section = ?)
-      AND gs.restricted = 0 AND u.role = 'guardian' AND u.account_status = 'active'`).all(class_level, section, section);
+      AND gs.restricted = 0 AND u.role = 'guardian' AND u.account_status = 'active'`).all(class_level, class_level, section, section);
 
   const school = schoolName();
   const text = `${school}: ${title}\n${body}`;

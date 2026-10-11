@@ -241,7 +241,7 @@ Dependency order: Phase 0 blocks everything. Phase 1 blocks 2, 3, 6. Phase 3 blo
 
 ### Phase 2: Alerts that reach parents (SMS, WhatsApp, email)
 
-**Status (2026-10-11): built and tested with a fake provider; not yet connected to a real SMS, WhatsApp, or email provider.** See [PHASE2_STATUS.md](PHASE2_STATUS.md) for what exists, the test results (messaging 22 of 22; full server suite 115 of 115; 1,000-message load test on the fake provider), and what is not done. The exit gate (95% delivery in a pilot month) and the real-provider cost check are not met. Provider choice (SMS and WhatsApp) is still an open decision, and until it is made the production default holds messages instead of sending them.
+**Status (2026-10-11): complete in code and tested (full server suite 143 of 143), and run end to end on a live local server.** Adapters are written for Sparrow SMS (Nepal), the WhatsApp Cloud API (approved templates), and SMTP. A live run sent an attendance alert through the worker to the Sparrow protocol. See [PHASE2_STATUS.md](PHASE2_STATUS.md) for what exists, the tests, and what the school or vendor must supply. The exit gate (95% delivery in a pilot month) and the real-cost check need live vendor accounts and a pilot school, so they are not met yet. The production default still holds messages until a provider is configured.
 
 **Goal.** Send attendance alerts, notices, and later fee reminders to parents by the channel they actually use, including parents with no app.
 

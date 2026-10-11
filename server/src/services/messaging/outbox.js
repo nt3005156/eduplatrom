@@ -26,6 +26,17 @@ export const CHANNELS = ['sms', 'whatsapp', 'email'];
 
 const sqlTime = ms => new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
 
+// Nepal is a fixed UTC+05:45 with no daylight saving, so a fixed offset gives the exact local month start.
+const NPT_OFFSET_MIN = 5 * 60 + 45;
+/** UTC instant at which the current month began in Asia/Kathmandu. Used for quotas and invoices. */
+export function monthStartUtc(now = new Date()) {
+  const local = new Date(now.getTime() + NPT_OFFSET_MIN * 60000);
+  return new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), 1) - NPT_OFFSET_MIN * 60000);
+}
+
+// Messages older than this are deleted by the daily purge, so personal data is not kept indefinitely.
+export const RETENTION_DAYS = Math.max(30, Number(process.env.MESSAGING_RETENTION_DAYS) || 365);
+
 export function getConfig() {
   return db.prepare('SELECT * FROM messaging_config WHERE id = 1').get();
 }
@@ -50,13 +61,19 @@ export function quotaFor(channel, config = getConfig()) {
   return config[`${channel}_monthly_quota`];
 }
 
-/** Messages successfully sent this calendar month on one channel (UTC month start). */
-export function usageThisMonth(channel) {
+/** Messages successfully sent this calendar month on one channel, counted from the Asia/Kathmandu month start. */
+export function usageThisMonth(channel, now = new Date()) {
   const row = db.prepare(`
     SELECT COUNT(*) AS messages, COALESCE(SUM(cost_units), 0) AS cost_units
     FROM message_outbox
-    WHERE channel = ? AND status = 'sent' AND sent_at >= datetime('now', 'start of month')`).get(channel);
+    WHERE channel = ? AND status = 'sent' AND sent_at >= ?`).get(channel, sqlTime(monthStartUtc(now).getTime()));
   return { messages: row.messages, cost_units: row.cost_units };
+}
+
+/** Deletes finished messages older than the retention period. Queued and sending rows are never deleted. */
+export function purgeOldMessages(days = RETENTION_DAYS) {
+  return db.prepare(`DELETE FROM message_outbox
+    WHERE created_at < datetime('now', ?) AND status NOT IN ('queued', 'sending')`).run(`-${days} days`).changes;
 }
 
 /**
@@ -184,6 +201,20 @@ export async function processOutbox({ limit = 100 } = {}) {
     }
   }
   return counts;
+}
+
+/**
+ * Sends one test message now, straight through the provider, and reports the outcome to the admin.
+ * Not stored in the outbox, because the outbox is for real alerts. The audit log records it.
+ */
+export async function sendTestMessage({ channel, recipient, body }) {
+  try {
+    const r = await send({ channel, recipient, subject: 'Test message', body });
+    if (r.simulated) return { status: 'simulated', provider_message_id: r.provider_message_id, note: 'Provider is in simulation mode. Nothing was sent to a real device.' };
+    return { status: 'sent', provider_message_id: r.provider_message_id || null, cost_units: r.cost_units ?? null };
+  } catch (err) {
+    return { status: 'failed', error: String(err.message || err).slice(0, 300), held: !!err.notConfigured, permanent: !!err.permanent };
+  }
 }
 
 /** Delivery summary for the admin page: counts by status and channel, and the monthly usage against quota. */
