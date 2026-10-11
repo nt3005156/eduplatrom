@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, BookOpen, ClipboardList, PenSquare, Megaphone, Users, UploadCloud, GraduationCap, LogOut, Palette, X, ShieldCheck, Calendar, UserCog, FileCheck2, Contact, BookMarked, Activity, KeySquare, ClipboardCheck, CalendarCheck, FileSpreadsheet, HeartHandshake } from 'lucide-react';
+import { LayoutDashboard, BookOpen, ClipboardList, PenSquare, Megaphone, Users, UploadCloud, GraduationCap, LogOut, Palette, X, ShieldCheck, Calendar, UserCog, FileCheck2, Contact, BookMarked, Activity, KeySquare, ClipboardCheck, CalendarCheck, FileSpreadsheet, HeartHandshake, MessageSquare } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useSettings } from '../context/SettingsContext.jsx';
 import { usePermissions } from '../context/PermissionContext.jsx';
@@ -55,7 +55,7 @@ export default function Sidebar({ mobileOpen, onClose }) {
     { to: '/admin/quizzes', label: 'Quizzes', icon: PenSquare },
     { to: '/admin/question-banks', label: 'Question Banks', icon: BookMarked },
     { to: '/admin/students', label: 'Students', icon: Users },
-    ...(isAdmin ? [{ to: '/admin/student-import', label: 'Import Students', icon: FileSpreadsheet }, { to: '/admin/guardians', label: 'Guardians', icon: HeartHandshake }] : []),
+    ...(isAdmin ? [{ to: '/admin/student-import', label: 'Import Students', icon: FileSpreadsheet }, { to: '/admin/guardians', label: 'Guardians', icon: HeartHandshake }, { to: '/admin/messages', label: 'Messages', icon: MessageSquare }] : []),
     ...((hasPermission('attendance.mark') || hasPermission('attendance.view')) ? [{ to: '/admin/attendance', label: 'Attendance', icon: CalendarCheck }] : []),
     { to: '/admin/announcements', label: 'Announcements', icon: Megaphone },
     { to: '/admin/preferences', label: 'My Preferences', icon: UserCog },

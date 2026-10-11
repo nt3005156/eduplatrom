@@ -732,3 +732,56 @@ CREATE TABLE IF NOT EXISTS account_setup_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_setup_tokens_user ON account_setup_tokens(user_id);
 
+
+-- Phase 2: parent alerts. Admin-only configuration. Kept out of the public settings row on purpose.
+CREATE TABLE IF NOT EXISTS messaging_config (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  alerts_enabled INTEGER NOT NULL DEFAULT 0,
+  sms_enabled INTEGER NOT NULL DEFAULT 0,
+  whatsapp_enabled INTEGER NOT NULL DEFAULT 0,
+  email_enabled INTEGER NOT NULL DEFAULT 0,
+  language TEXT NOT NULL DEFAULT 'en' CHECK(language IN ('en','ne','both')),
+  sms_monthly_quota INTEGER NOT NULL DEFAULT 1000,
+  whatsapp_monthly_quota INTEGER NOT NULL DEFAULT 1000,
+  email_monthly_quota INTEGER NOT NULL DEFAULT 5000,
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+INSERT OR IGNORE INTO messaging_config (id) VALUES (1);
+
+-- One row per message. dedupe_key is unique, so enqueueing the same event twice cannot send twice.
+-- Each school has its own database (Phase 7), so there is no school_id column.
+CREATE TABLE IF NOT EXISTS message_outbox (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel TEXT NOT NULL CHECK(channel IN ('sms','whatsapp','email')),
+  recipient TEXT,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  student_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  template_id TEXT NOT NULL,
+  subject TEXT,
+  body TEXT NOT NULL,
+  dedupe_key TEXT UNIQUE NOT NULL,
+  event_kind TEXT NOT NULL CHECK(event_kind IN ('attendance','notice')),
+  event_date TEXT,
+  event_status TEXT,
+  status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN
+    ('queued','sending','sent','simulated','failed','skipped_optout','skipped_stale','skipped_no_contact')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT DEFAULT (datetime('now')),
+  last_error TEXT,
+  provider_message_id TEXT,
+  cost_units INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  sent_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_outbox_due ON message_outbox(status, next_attempt_at);
+CREATE INDEX IF NOT EXISTS idx_outbox_usage ON message_outbox(channel, status, sent_at);
+
+-- Anyone listed here never receives that channel. The worker checks this at send time, not only at enqueue.
+CREATE TABLE IF NOT EXISTS message_optouts (
+  recipient TEXT NOT NULL,
+  channel TEXT NOT NULL CHECK(channel IN ('sms','whatsapp','email')),
+  created_at TEXT DEFAULT (datetime('now')),
+  created_by INTEGER,
+  PRIMARY KEY (recipient, channel)
+);

@@ -241,6 +241,8 @@ Dependency order: Phase 0 blocks everything. Phase 1 blocks 2, 3, 6. Phase 3 blo
 
 ### Phase 2: Alerts that reach parents (SMS, WhatsApp, email)
 
+**Status (2026-10-11): built and tested with a fake provider; not yet connected to a real SMS, WhatsApp, or email provider.** See [PHASE2_STATUS.md](PHASE2_STATUS.md) for what exists, the test results (messaging 22 of 22; full server suite 115 of 115; 1,000-message load test on the fake provider), and what is not done. The exit gate (95% delivery in a pilot month) and the real-provider cost check are not met. Provider choice (SMS and WhatsApp) is still an open decision, and until it is made the production default holds messages instead of sending them.
+
 **Goal.** Send attendance alerts, notices, and later fee reminders to parents by the channel they actually use, including parents with no app.
 
 **Why.** Attendance is the most-used feature in school software ([GegoK12](https://gegok12.com/top-10-school-erp-features-schools-actually-use-in-2026/)). Nepali vendors say SMS is still needed for parents without a smartphone ([pdpspectra](https://pdpspectra.com/solutions/student-experience-nepal/)). Parent communication ranks among the top digital tools in US surveys ([K-12 Dive](https://www.k12dive.com/news/parent-survey-reveals-school-communication-preferences/428711/)).

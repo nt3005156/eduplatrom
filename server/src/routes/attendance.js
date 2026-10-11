@@ -21,6 +21,7 @@ import { requirePermission } from '../services/permissions.js';
 import { resolveScope, isWithinScope } from '../services/scope.js';
 import { logAudit } from '../utils/audit.js';
 import { notifyUser } from '../utils/notify.js';
+import { queueAttendanceAlerts } from '../services/messaging/alerts.js';
 
 const router = Router();
 
@@ -219,6 +220,22 @@ router.post('/', requireAuth, requireStaff, requirePermission('attendance.mark')
       body: subjectId ? 'You were marked absent in a subject class.' : 'You were marked absent for the day.',
       link: '/attendance',
     });
+  }
+
+  // Parent alerts follow the daily register only. A subject register would alert once per lesson.
+  // A failure here must never block the register itself, so it is logged and the save still succeeds.
+  if (subjectId == null) {
+    try {
+      const alertRecords = records.filter(r => r.status === 'absent' || r.status === 'late');
+      if (alertRecords.length) {
+        const ids = alertRecords.map(r => Number(r.student_id));
+        const marks = ids.map(() => '?').join(',');
+        const names = new Map(db.prepare(`SELECT id, name FROM users WHERE id IN (${marks})`).all(...ids).map(u => [u.id, u.name]));
+        queueAttendanceAlerts({ records: alertRecords, date, studentNames: names });
+      }
+    } catch (err) {
+      console.error('parent alerts were not queued:', err.message);
+    }
   }
 
   const label = `${subjectId ? 'subject' : 'daily'} register, Class ${classLevel}${section ? ` ${section}` : ''}, ${date}`;

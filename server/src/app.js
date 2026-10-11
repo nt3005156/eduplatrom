@@ -33,6 +33,7 @@ import academicHeadRoutes from './routes/academicHead.js';
 import attendanceRoutes from './routes/attendance.js';
 import privacyRoutes from './routes/privacy.js';
 import { adminRouter as guardianAdminRoutes, portalRouter as guardianPortalRoutes } from './routes/guardians.js';
+import messageRoutes from './routes/messages.js';
 import studentImportRoutes from './routes/studentImport.js';
 import { requireFileAccess } from './middleware/auth.js';
 import db from './db/index.js';
@@ -126,6 +127,7 @@ export function createApp() {
   app.use('/api/privacy', privacyRoutes);
   app.use('/api/guardians', guardianAdminRoutes);
   app.use('/api/guardian', guardianPortalRoutes);
+  app.use('/api/messages', messageRoutes);
   app.use('/api/student-import', studentImportRoutes);
 
   // Unknown API paths must return JSON 404, not the SPA shell.
