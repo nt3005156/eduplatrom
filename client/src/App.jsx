@@ -13,6 +13,8 @@ import Materials from './pages/student/Materials.jsx';
 import Assignments from './pages/student/Assignments.jsx';
 import Quizzes from './pages/student/Quizzes.jsx';
 import Announcements from './pages/student/Announcements.jsx';
+import StudentAttendance from './pages/student/Attendance.jsx';
+import AdminAttendance from './pages/admin/Attendance.jsx';
 
 import AdminOverview from './pages/admin/Overview.jsx';
 import ManageContent from './pages/admin/ManageContent.jsx';
@@ -101,6 +103,7 @@ export default function App() {
             <Route path="/assignments" element={<ProtectedRoute role="student"><Assignments /></ProtectedRoute>} />
             <Route path="/quizzes" element={<ProtectedRoute role="student"><Quizzes /></ProtectedRoute>} />
             <Route path="/announcements" element={<ProtectedRoute role="student"><Announcements /></ProtectedRoute>} />
+            <Route path="/attendance" element={<ProtectedRoute role="student"><StudentAttendance /></ProtectedRoute>} />
 
             <Route path="/admin" element={<ProtectedRoute role={['admin', 'teacher']}><RequireAssignment title="Overview"><AdminOverview /></RequireAssignment></ProtectedRoute>} />
             <Route path="/admin/content" element={<ProtectedRoute role={['admin', 'teacher']}><RequireAssignment title="Manage Content"><ManageContent /></RequireAssignment></ProtectedRoute>} />
@@ -108,6 +111,7 @@ export default function App() {
             <Route path="/admin/quizzes" element={<ProtectedRoute role={['admin', 'teacher']}><RequireAssignment title="Quizzes"><AdminQuizzes /></RequireAssignment></ProtectedRoute>} />
             <Route path="/admin/question-banks" element={<ProtectedRoute role={['admin', 'teacher']}><RequireAssignment title="Question Banks"><QuestionBanks /></RequireAssignment></ProtectedRoute>} />
             <Route path="/admin/students" element={<ProtectedRoute role={['admin', 'teacher']}><RequireAssignment title="Students"><AdminStudents /></RequireAssignment></ProtectedRoute>} />
+            <Route path="/admin/attendance" element={<ProtectedRoute role={['admin', 'teacher']}><RequireAssignment title="Attendance"><AdminAttendance /></RequireAssignment></ProtectedRoute>} />
             <Route path="/admin/announcements" element={<ProtectedRoute role={['admin', 'teacher']}><RequireAssignment title="Announcements"><AdminAnnouncements /></RequireAssignment></ProtectedRoute>} />
             <Route path="/admin/branding" element={<ProtectedRoute role="admin"><AdminBranding /></ProtectedRoute>} />
             <Route path="/admin/audit-log" element={<RequirePermissionRoute perm="audit.view"><AuditLog /></RequirePermissionRoute>} />

@@ -179,10 +179,12 @@ export default function Login() {
             {loading ? 'Signing in...' : 'Sign In'} <ArrowRight size={16} />
           </button>
 
-          <div className="flex gap-2" style={{ marginTop: 14 }}>
-            <button type="button" className="btn btn-outline btn-sm" style={{ flex: 1 }} onClick={() => quickFill('student')}>Demo Student</button>
-            <button type="button" className="btn btn-outline btn-sm" style={{ flex: 1 }} onClick={() => quickFill('admin')}>Demo Admin</button>
-          </div>
+          {import.meta.env.DEV && (
+            <div className="flex gap-2" style={{ marginTop: 14 }}>
+              <button type="button" className="btn btn-outline btn-sm" style={{ flex: 1 }} onClick={() => quickFill('student')}>Demo Student</button>
+              <button type="button" className="btn btn-outline btn-sm" style={{ flex: 1 }} onClick={() => quickFill('admin')}>Demo Admin</button>
+            </div>
+          )}
 
           <p className="text-sm text-dim" style={{ textAlign: 'center', marginTop: 22 }}>
             New student? <Link to="/register" style={{ color: 'var(--primary)', fontWeight: 700 }}>Create an account</Link>

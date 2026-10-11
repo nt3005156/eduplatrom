@@ -1,0 +1,107 @@
+// Express application factory. Kept separate from the listen() call in
+// index.js so the test suite can import the app without binding a port.
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import morgan from 'morgan';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+
+import './db/index.js';
+import './db/seed.js';
+
+import authRoutes from './routes/auth.js';
+import subjectRoutes from './routes/subjects.js';
+import materialRoutes from './routes/materials.js';
+import assignmentRoutes from './routes/assignments.js';
+import quizRoutes from './routes/quizzes.js';
+import dashboardRoutes from './routes/dashboard.js';
+import announcementRoutes from './routes/announcements.js';
+import settingsRoutes from './routes/settings.js';
+import notificationRoutes from './routes/notifications.js';
+import userRoutes from './routes/users.js';
+import auditRoutes from './routes/audit.js';
+import applicationRoutes from './routes/applications.js';
+import teacherRoutes from './routes/teachers.js';
+import coordinatorRoutes from './routes/coordinator.js';
+import rolesRoutes from './routes/roles.js';
+import permissionsRoutes from './routes/permissions.js';
+import academicHeadRoutes from './routes/academicHead.js';
+import attendanceRoutes from './routes/attendance.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const CLIENT_DIST = path.join(__dirname, '..', '..', 'client', 'dist');
+
+export function createApp() {
+  const app = express();
+
+  // When deployed behind a reverse proxy / load balancer (Nginx, Render,
+  // Cloudflare, etc.) the client IP arrives in X-Forwarded-For. Without this,
+  // every student would share one rate-limit bucket. Set TRUST_PROXY=1 (or
+  // "true") in production when a proxy sits in front of the app.
+  if (process.env.TRUST_PROXY) {
+    const v = process.env.TRUST_PROXY;
+    app.set('trust proxy', v === 'true' ? true : Number.isNaN(Number(v)) ? v : Number(v));
+  }
+
+  // Security headers. CSP/COEP disabled: the API is JSON and the SPA is served
+  // from the same origin; a strict default CSP would only break the Vite bundle.
+  app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
+  app.use(cors());
+  if (process.env.NODE_ENV !== 'test') app.use(morgan('dev'));
+  app.use(express.json({ limit: '2mb' }));
+  app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+  // General API rate limit, plus a tighter limit on auth endpoints.
+  app.use('/api', rateLimit({ windowMs: 15 * 60 * 1000, max: 600, standardHeaders: true, legacyHeaders: false }));
+  const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 50, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts, please try again later.' } });
+
+  app.get('/api/health', (req, res) => res.json({ ok: true, name: 'NITEX API' }));
+
+  app.use('/api/auth', authLimiter, authRoutes);
+  app.use('/api/subjects', subjectRoutes);
+  app.use('/api/materials', materialRoutes);
+  app.use('/api/assignments', assignmentRoutes);
+  app.use('/api/quizzes', quizRoutes);
+  app.use('/api/dashboard', dashboardRoutes);
+  app.use('/api/announcements', announcementRoutes);
+  app.use('/api/settings', settingsRoutes);
+  app.use('/api/notifications', notificationRoutes);
+  app.use('/api/users', userRoutes);
+  app.use('/api/audit', auditRoutes);
+  app.use('/api/applications', applicationRoutes);
+  app.use('/api/teachers', teacherRoutes);
+  app.use('/api/coordinator', coordinatorRoutes);
+  app.use('/api/roles', rolesRoutes);
+  app.use('/api/permissions', permissionsRoutes);
+  app.use('/api/academic-head', academicHeadRoutes);
+  app.use('/api/attendance', attendanceRoutes);
+
+  // Unknown API paths must return JSON 404, not the SPA shell.
+  app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
+
+  // Serve the built React app (client/dist) from the same origin, so the
+  // browser's relative /api calls work in production with no proxy config.
+  if (fs.existsSync(path.join(CLIENT_DIST, 'index.html'))) {
+    app.use(express.static(CLIENT_DIST, { index: false, maxAge: '1h' }));
+    app.use((req, res, next) => {
+      if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+      res.sendFile(path.join(CLIENT_DIST, 'index.html'));
+    });
+  }
+
+  app.use((err, req, res, next) => {
+    if (process.env.NODE_ENV !== 'test') console.error(err);
+    // Multer / our own upload validation errors carry a user-safe message.
+    if (err?.name === 'MulterError' || /file type|not allowed|too large/i.test(err?.message || '')) {
+      return res.status(400).json({ error: err.message });
+    }
+    if (err?.type === 'entity.parse.failed') return res.status(400).json({ error: 'Malformed JSON body' });
+    res.status(500).json({ error: 'Internal server error' });
+  });
+
+  return app;
+}

@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, BookOpen, ClipboardList, PenSquare, Megaphone,
-  Users, UploadCloud, GraduationCap, LogOut, Palette, X, ShieldCheck, Calendar, UserCog, FileCheck2, Contact, BookMarked, Activity, KeySquare, ClipboardCheck
+  Users, UploadCloud, GraduationCap, LogOut, Palette, X, ShieldCheck, Calendar, UserCog, FileCheck2, Contact, BookMarked, Activity, KeySquare, ClipboardCheck, CalendarCheck
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useSettings } from '../context/SettingsContext.jsx';
@@ -39,6 +39,7 @@ export default function Sidebar({ mobileOpen, onClose }) {
     { to: '/assignments', label: 'Assignments', icon: ClipboardList },
     { to: '/quizzes', label: 'Quizzes', icon: PenSquare },
     { to: '/announcements', label: 'Announcements', icon: Megaphone },
+    { to: '/attendance', label: 'My Attendance', icon: CalendarCheck },
   ];
 
   // Coordinator / monitoring-tier nav: no content/assignment/quiz creation
@@ -57,6 +58,7 @@ export default function Sidebar({ mobileOpen, onClose }) {
     { to: '/admin/quizzes', label: 'Quizzes', icon: PenSquare },
     { to: '/admin/question-banks', label: 'Question Banks', icon: BookMarked },
     { to: '/admin/students', label: 'Students', icon: Users },
+    ...((hasPermission('attendance.mark') || hasPermission('attendance.view')) ? [{ to: '/admin/attendance', label: 'Attendance', icon: CalendarCheck }] : []),
     { to: '/admin/announcements', label: 'Announcements', icon: Megaphone },
     { to: '/admin/preferences', label: 'My Preferences', icon: UserCog },
   ];

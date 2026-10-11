@@ -1,6 +1,11 @@
 import jwt from 'jsonwebtoken';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'nitex_dev_secret_change_in_prod';
+const IS_PROD = process.env.NODE_ENV === 'production';
+if (IS_PROD && (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32)) {
+  throw new Error('JWT_SECRET must be set (32+ chars) when NODE_ENV=production');
+}
+// The fallback is only ever used in development/test.
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-insecure-secret';
 
 // --- Role architecture -----------------------------------------------------
 // role: 'student' | 'teacher' | 'admin' (top-level account type — controls which

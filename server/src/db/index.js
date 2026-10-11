@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import { seedRbac } from './seedRbac.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_PATH = path.join(__dirname, 'nitex.db');
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'nitex.db');
 const SCHEMA_PATH = path.join(__dirname, 'schema.sql');
 
 const isNew = !fs.existsSync(DB_PATH);

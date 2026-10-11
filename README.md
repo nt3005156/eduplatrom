@@ -25,7 +25,7 @@ npm run dev
 The app runs on `http://localhost:5173` (Vite dev server) and talks to the
 API at `http://localhost:4000`.
 
-### Demo credentials (seeded automatically)
+### Demo credentials (seeded automatically in development only)
 | Role    | Email                | Password      |
 |---------|-----------------------|---------------|
 | Admin   | admin@nitex.com       | Admin@123     |
@@ -36,6 +36,40 @@ To reseed from scratch, stop the server and delete
 `server/src/db/nitex.db*`, then start the server again.
 
 ---
+
+## Production deployment (environment variables)
+
+Set these on your host. Never commit real values.
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `NODE_ENV` | yes | `production` disables demo accounts and enforces the checks below |
+| `JWT_SECRET` | yes in production | 32+ random characters used to sign login tokens |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | first deploy | Creates the first admin when the database is empty (password 10+ chars) |
+| `DB_PATH` | recommended | Absolute path to the SQLite file on a persistent disk |
+| `TRUST_PROXY` | behind a proxy | `1` or `true`, so rate limits see real student IPs |
+| `PORT` | optional | Defaults to `4000` |
+| `SEED_DEMO` | optional | `true` creates the demo accounts even in production (not for real schools) |
+| `ATTENDANCE_EDIT_WINDOW_DAYS` | optional | Days back a teacher may edit a register (default 7) |
+
+Build and run (one process serves the API and the web app):
+
+```bash
+cd client && npm ci && npm run build
+cd ../server && npm ci && NODE_ENV=production JWT_SECRET=... ADMIN_EMAIL=... ADMIN_PASSWORD=... node src/index.js
+```
+
+Tests: `cd server && npm test` (server) and `python3 e2e/attendance_e2e.py` (browser, against a running server).
+
+## Attendance (new)
+
+- **Daily register** (Class Teacher, homeroom) and **subject register** (Subject Teacher, per class).
+- Bulk marking for a whole class in one save; re-saving updates, never duplicates.
+- Statuses: Present, Absent, Late, Excused, Half day, with optional remarks.
+- Percentage = (present + late + excused + 0.5 × half day) ÷ days marked. Below 75% is flagged as at risk.
+- Teachers can edit only the last 7 days; Academic Heads and Admins can correct older records. Every change is audited.
+- Absent students get an in-app notification.
+- Reports per class with CSV export. Students see their own overall and per-subject attendance.
 
 ## What's included
 

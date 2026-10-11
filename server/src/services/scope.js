@@ -36,7 +36,13 @@ export function resolveScope(user) {
   const role = getUserRole.get(user?.id);
   const roleKey = role?.role_key || (user?.role === 'admin' ? 'system_admin' : null);
 
-  if (!roleKey || UNRESTRICTED_ROLE_KEYS.has(roleKey)) {
+  // Fail closed: a user with no resolvable role gets NO scope (previously this
+  // path returned unrestricted=true, which exposed every class to them).
+  if (!roleKey) {
+    return { unrestricted: false, roleKey: null, classSections: [], subjectAssignments: [], departments: [] };
+  }
+
+  if (UNRESTRICTED_ROLE_KEYS.has(roleKey)) {
     return { unrestricted: true, roleKey, classSections: [], subjectAssignments: [], departments: [] };
   }
 

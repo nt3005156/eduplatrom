@@ -52,6 +52,9 @@ export const PERMISSIONS = [
   { key: 'analytics.view_school_wide', module: 'reports', label: 'Can View School-Wide Analytics', description: '' },
   { key: 'analytics.view_class', module: 'reports', label: 'Can View Own Class/Subject Analytics', description: '' },
   // communication
+  // attendance — enforced by routes/attendance.js (scope-checked per class/section/subject)
+  { key: 'attendance.mark', module: 'attendance', label: 'Can Mark Attendance', description: 'Record attendance for classes and subjects within the teacher\'s own scope.' },
+  { key: 'attendance.view', module: 'attendance', label: 'Can View Attendance Reports', description: 'View attendance registers and summaries within scope.' },
   { key: 'communication.broadcast_school', module: 'communication', label: 'Can Broadcast School-Wide Announcement', description: '' },
   { key: 'communication.broadcast_class', module: 'communication', label: 'Can Broadcast Class Announcement', description: '' },
   // settings
@@ -74,6 +77,7 @@ export const ROLE_DEFAULTS = {
     // their own classes via isWithinScope() in routes/announcements.js, they
     // just can't broadcast school-wide (that stays Academic-Head-only).
     'communication.broadcast_class': 'allow',
+    'attendance.mark': 'allow', 'attendance.view': 'allow',
   },
   class_teacher: {
     'content.create': 'allow', 'content.archive': 'allow',
@@ -82,11 +86,13 @@ export const ROLE_DEFAULTS = {
     'grade.create': 'allow',
     'analytics.view_class': 'allow',
     'communication.broadcast_class': 'allow',
+    'attendance.mark': 'allow', 'attendance.view': 'allow',
   },
   coordinator: {
     'audit.view': 'allow',
     'analytics.view_school_wide': 'allow',
     'analytics.view_class': 'allow',
+    'attendance.view': 'allow',
     // explicit denies to make the "mostly read-only" intent visible/auditable
     // in the matrix, not just an absence of a grant.
     'assignment.create': 'deny', 'quiz.create': 'deny', 'grade.override': 'deny',
@@ -104,6 +110,7 @@ export const ROLE_DEFAULTS = {
     'audit.view': 'allow',
     'analytics.view_school_wide': 'allow', 'analytics.view_class': 'allow',
     'communication.broadcast_school': 'allow', 'communication.broadcast_class': 'allow',
+    'attendance.view': 'allow',
     // teacher.manage / settings.permission_matrix intentionally NOT granted —
     // admin_only=1 hard-locks these to system_admin regardless (see
     // services/permissions.js), but we also don't grant them here so the

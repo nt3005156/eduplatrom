@@ -1,5 +1,6 @@
 import db from './index.js';
 import bcrypt from 'bcryptjs';
+import { seedRbac } from './seedRbac.js';
 
 const subjectCount = db.prepare('SELECT COUNT(*) c FROM subjects').get().c;
 const userCount = db.prepare('SELECT COUNT(*) c FROM users').get().c;
@@ -29,7 +30,21 @@ if (subjectCount === 0) {
   console.log('Seeded subjects for classes 6-12');
 }
 
-if (userCount === 0) {
+// Demo accounts (with publicly documented passwords) are only created outside
+// production, or when SEED_DEMO=true is set explicitly. In production, the
+// first admin is bootstrapped from ADMIN_EMAIL / ADMIN_PASSWORD instead.
+const DEMO_ENABLED = process.env.NODE_ENV !== 'production' || process.env.SEED_DEMO === 'true';
+
+if (userCount === 0 && !DEMO_ENABLED && process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
+  if (String(process.env.ADMIN_PASSWORD).length < 10) {
+    throw new Error('ADMIN_PASSWORD must be at least 10 characters');
+  }
+  db.prepare('INSERT INTO users (name, email, password_hash, role, avatar_color) VALUES (?,?,?,?,?)')
+    .run('School Admin', process.env.ADMIN_EMAIL.toLowerCase(), bcrypt.hashSync(process.env.ADMIN_PASSWORD, 12), 'admin', '#2D3436');
+  console.log(`Bootstrapped admin account ${process.env.ADMIN_EMAIL}`);
+}
+
+if (userCount === 0 && DEMO_ENABLED) {
   const insertUser = db.prepare('INSERT INTO users (name, email, password_hash, role, class_level, section, avatar_color, staff_role) VALUES (?,?,?,?,?,?,?,?)');
   const adminHash = bcrypt.hashSync('Admin@123', 10);
   const teacherHash = bcrypt.hashSync('Teacher@123', 10);
@@ -70,7 +85,7 @@ if (sectionCount === 0) {
 
 // Seed a sample quiz + questions + a couple of materials for class 10 Mathematics if empty
 const mathSubject = db.prepare("SELECT id FROM subjects WHERE class_level=10 AND name='Mathematics'").get();
-if (mathSubject) {
+if (mathSubject && DEMO_ENABLED) {
   const quizCount = db.prepare('SELECT COUNT(*) c FROM quizzes WHERE subject_id=?').get(mathSubject.id).c;
   if (quizCount === 0) {
     const admin = db.prepare("SELECT id FROM users WHERE role='admin'").get();
@@ -90,3 +105,8 @@ if (mathSubject) {
     console.log('Seeded sample quiz and materials for Class 10 Mathematics');
   }
 }
+
+// seedRbac() backfills users.role_id from the legacy role columns. It has to run
+// AFTER users are created here, otherwise seeded users have no role and every
+// permission check fails closed for them.
+seedRbac(db);

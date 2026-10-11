@@ -1,0 +1,25 @@
+# Dependencies (install with npm ci on each machine / host)
+node_modules/
+
+# Build output
+client/dist/
+dist/
+
+# Runtime data - never commit databases, uploads or secrets
+server/src/db/*.db
+server/src/db/*.db-shm
+server/src/db/*.db-wal
+server/src/uploads/
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+!.env.example
+
+# Logs / editors / OS
+*.log
+npm-debug.log*
+.DS_Store
+.vscode/
+.idea/
