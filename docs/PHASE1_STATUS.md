@@ -2,7 +2,7 @@
 
 Date: 2026-10-11. Plan reference: [PRODUCTION_ROADMAP.md](PRODUCTION_ROADMAP.md), Phase 1.
 
-**Status: built and tested locally. Not yet committed or pushed at the time of writing.** The exit gate (3 pilot schools with guardian accounts for at least 80% of students) cannot be measured until a pilot school is live. It is not met yet.
+**Status: built, tested, and pushed to `origin/main`.** The exit gate (3 pilot schools with guardian accounts for at least 80% of students) cannot be measured until a pilot school is live. It is not met yet.
 
 ---
 
@@ -14,7 +14,7 @@ Date: 2026-10-11. Plan reference: [PRODUCTION_ROADMAP.md](PRODUCTION_ROADMAP.md)
 | Child links | `guardian_students` table: relationship (father, mother, guardian, grandparent, other), primary flag, attendance, fees, pay-fees, pick-up, custody restriction flag, creator, timestamps. One row per guardian and child. | `server/src/db/schema.sql` |
 | Access flags | Admin can change attendance visibility, restriction, and the other flags. A restriction hides the child on the next request. | `PATCH /api/guardians/:id/students/:studentId` |
 | One-time setup links | Guardians and imported students set their own password from a link. Links expire after 7 days. Only SHA-256 hashes are stored. A new link voids the old one. | `services/accountSetup.js`, `routes/auth.js` (`GET` and `POST /api/auth/setup`) |
-| Guardian portal | Child list, child attendance (daily and by subject, date range), school announcements from linked classes, profile API. | `/api/guardian/*`, client `pages/guardian/*` |
+| Guardian portal | Child list, child attendance (daily and by subject, date range), school announcements from linked classes, and a read-only profile page (name, sign-in email, phone with verification state). | `/api/guardian/*`, client `pages/guardian/*` |
 | Admin pages | Guardian list and editor, student bulk import with preview, CSV template, and setup-link CSV download. | client `pages/admin/Guardians.jsx`, `pages/admin/StudentImport.jsx` |
 | Bulk import | CSV, up to 2,000 rows per file. Any bad row refuses the whole file (422) and writes nothing. Siblings sharing a guardian email are linked to one account. | `routes/studentImport.js`, `utils/validate.js` |
 | Student profile fields | Phone (normalised to E.164), date of birth (AD and BS), address, admission number, roll number, IEMIS ID, NEB registration number, blood group, emergency contact name and phone. Admin-only `PATCH /api/users/:id/profile`, audited with before and after values. | `db/index.js` (`addColumnIfMissing`), `routes/users.js` |
@@ -26,14 +26,14 @@ Date: 2026-10-11. Plan reference: [PRODUCTION_ROADMAP.md](PRODUCTION_ROADMAP.md)
 
 | Check | Result | Evidence |
 |---|---|---|
-| Full server suite | **92 of 92 pass** | `cd server && npm test` (node:test). Includes the two `privacy-uploads` tests that had failed before the export fix. |
+| Full server suite | **93 of 93 pass** | `cd server && npm test` (node:test). Includes the two `privacy-uploads` tests that had failed before the export fix. |
 | Guardian rules | 19 of 19 | `server/test/guardians.test.js` |
 | Import rules | 10 of 10 | `server/test/student-import.test.js` |
-| Isolation and scope | 9 of 9 | `server/test/guardian-isolation.test.js` |
+| Isolation and scope | 10 of 10 | `server/test/guardian-isolation.test.js` |
 | Validation | 9 of 9 | `server/test/validate.test.js` |
 | Client build | Exit 0 | `cd client && npm run build` |
 | Lint | 0 errors, 37 warnings | Same warning count as before Phase 1. |
-| Browser run | **15 of 15 pass**, run three times on fresh databases (before the layout fix, after it, and after all the changes in section 3) | `e2e/phase1_guardian_e2e.py`. Covers admin guardian list, import preview blocking bad rows, template download, setup link (single use), portal showing only linked children, 390px no horizontal scroll, HttpOnly session cookie with no file cookie, attendance on a phone, guardian refused on staff, file and admin routes, admin URL redirect, empty state, no console errors. |
+| Browser run | **16 of 16 pass**, run four times on fresh databases (before the layout fix, after it, after the changes in section 3, and after the profile page was added) | `e2e/phase1_guardian_e2e.py`. Covers the parent's own profile on a phone with no children listed, admin guardian list, import preview blocking bad rows, template download, setup link (single use), portal showing only linked children, 390px no horizontal scroll, HttpOnly session cookie with no file cookie, attendance on a phone, guardian refused on staff, file and admin routes, admin URL redirect, empty state, no console errors. |
 | Endpoints the browser run did not reach | Checked directly with HTTP calls | `PUT /api/guardians/:id`, `PATCH` and `DELETE` on guardian students, `POST /api/guardians/:id/students`, `POST /api/guardians/:id/setup-link`, `GET /api/guardians/student-search`. All return the shapes the pages read. Writes need the `X-NITEX-Client` header, and cross-site writes without it return 403. |
 
 Response shapes the pages depend on (`children`, `daily`, `subjects`, `records`, `attendance_last_30_days`, `can_view_attendance`, `setup_url`, `setup_expires_in_days`, `setup_links`, `created`, `links`, `student_name`) were checked against the routes.
@@ -59,7 +59,7 @@ These were made after the last browser run and are covered by the full suite:
 2. `services/guardians.js`: archived and disabled children are hidden from both the child list and direct child reads. Before this change, a linked archived child still appeared.
 3. Guardian portal layout: child cards no longer wrap names onto three lines at 390px.
 
-The browser suite was rerun against a restarted server with a fresh database after all three changes: 15 of 15 pass.
+The browser suite was rerun against a restarted server with a fresh database after all changes, including the profile page: 16 of 16 pass.
 
 ## 4. Assumptions
 
@@ -88,8 +88,8 @@ If the user chooses a different model (for example, one parent login across seve
 
 - No fee, invoice, or payment views for guardians (Phase 3).
 - No report cards for guardians (Phase 4).
-- No photo field on students.
-- No guardian profile page in the client. The `/api/guardian/profile` API exists.
+- No photo field on students. This is deferred on purpose. A photo is personal data, and `/uploads` (section 5) would let any signed-in staff member or student open it. Store photos only after the ownership fix.
+- Guardians cannot edit their own name, email, or phone. The profile page is read-only, and the school office makes changes. Self-service edits need phone verification (Phase 2).
 - No SMS, WhatsApp, or email delivery of setup links or notices (Phase 2).
 - No legal review of guardian access rules, custody handling, or the Nepal data-protection position (open decision 8 in the roadmap).
 - Two parent logins across two schools are not supported. Under the database-per-school decision (Phase 7), an account lives in one school's database.

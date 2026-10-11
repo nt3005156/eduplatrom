@@ -196,7 +196,7 @@ Dependency order: Phase 0 blocks everything. Phase 1 blocks 2, 3, 6. Phase 3 blo
 
 ### Phase 1: Guardian accounts and richer student profiles
 
-**Status (2026-10-11): built and tested locally, not yet pushed.** See [PHASE1_STATUS.md](PHASE1_STATUS.md) for what exists, the test results (full server suite 92 of 92; browser run 15 of 15), the parent account model assumption, and the open `/uploads` ownership gap. The 3-pilot-school exit gate is not yet met.
+**Status (2026-10-11): built, tested, and pushed to `main`.** See [PHASE1_STATUS.md](PHASE1_STATUS.md) for what exists, the test results (full server suite 93 of 93; browser run 16 of 16), the parent account model assumption, and the open `/uploads` ownership gap. The photo field is deferred until that gap is fixed. The 3-pilot-school exit gate is not yet met.
 
 **Goal.** Add parents and guardians as users, linked to their children, with per-child permissions. Expand the student record to what schools and IEMIS need.
 

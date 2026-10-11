@@ -36,6 +36,7 @@ import RequireAssignment from './components/RequireAssignment.jsx';
 import SetupPassword from './pages/auth/SetupPassword.jsx';
 import GuardianHome from './pages/guardian/GuardianHome.jsx';
 import ChildAttendance from './pages/guardian/ChildAttendance.jsx';
+import GuardianProfile from './pages/guardian/GuardianProfile.jsx';
 import Guardians from './pages/admin/Guardians.jsx';
 import StudentImport from './pages/admin/StudentImport.jsx';
 
@@ -106,6 +107,7 @@ export default function App() {
             <Route path="/setup" element={<SetupPassword />} />
 
             <Route path="/guardian" element={<ProtectedRoute role="guardian"><GuardianHome /></ProtectedRoute>} />
+            <Route path="/guardian/profile" element={<ProtectedRoute role="guardian"><GuardianProfile /></ProtectedRoute>} />
             <Route path="/guardian/children/:studentId" element={<ProtectedRoute role="guardian"><ChildAttendance /></ProtectedRoute>} />
 
             <Route path="/dashboard" element={<ProtectedRoute role="student"><StudentDashboard /></ProtectedRoute>} />

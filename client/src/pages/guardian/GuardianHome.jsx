@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronRight, CalendarCheck, Megaphone, Lock } from 'lucide-react';
+import { ChevronRight, CalendarCheck, Megaphone, Lock, UserRound } from 'lucide-react';
 import api from '../../api/client.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import GuardianLayout from './GuardianLayout.jsx';
@@ -29,7 +29,10 @@ export default function GuardianHome() {
 
   return (
     <GuardianLayout title={`Hello, ${user?.name?.split(' ')[0] || 'there'}`}>
-      <h4 style={{ margin: '4px 0 10px' }}>Your children</h4>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '4px 0 10px' }}>
+        <h4>Your children</h4>
+        <Link to="/guardian/profile" className="btn btn-ghost btn-sm"><UserRound size={14} /> My profile</Link>
+      </div>
       {error && <p role="alert" style={{ color: 'var(--danger)' }}>{error}</p>}
       {children === null && !error && <p className="text-dim">Loading...</p>}
       {children?.length === 0 && (

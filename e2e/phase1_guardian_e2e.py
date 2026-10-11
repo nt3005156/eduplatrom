@@ -158,6 +158,17 @@ with sync_playwright() as p:
 
     check("parent opens a child's attendance on a phone", child_attendance_page)
 
+    def profile_page_on_phone():
+        parent.goto(f"{BASE}/guardian")
+        parent.get_by_role("link", name=re.compile("My profile")).click()
+        parent.wait_for_url(re.compile(r".*/guardian/profile$"), timeout=10000)
+        expect(parent.get_by_text("Sign-in email")).to_be_visible(timeout=10000)
+        expect(parent.get_by_text("ram.sharma@example.com")).to_be_visible(timeout=10000)
+        assert parent.evaluate("() => document.documentElement.scrollWidth") <= 390
+        assert parent.get_by_text("Asha Sharma").count() == 0, "profile must not list children"
+
+    check("parent sees own profile on a phone (no children listed)", profile_page_on_phone)
+
     def parent_fenced_out():
         result = parent.evaluate("""async () => {
           const out = {};

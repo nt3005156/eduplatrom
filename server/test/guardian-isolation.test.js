@@ -169,3 +169,15 @@ test('bad data cannot grant a guardian staff access: a stray teacher assignment 
   assert.deepEqual(scope.classSections, [], 'guardian scope is empty even with a teacher row');
   assert.deepEqual(scope.subjectAssignments, []);
 });
+
+test('the guardian profile shows only the signed-in guardian\'s own record', async () => {
+  const a = await call('GET', '/api/guardian/profile', { token: tok.famA });
+  assert.equal(a.status, 200);
+  assert.equal(a.json.guardian.name, 'Family A');
+  assert.equal(a.json.guardian.email, 'a@family.test');
+  assert.ok(!a.text.includes('Family B'), 'another family\'s profile never appears');
+  assert.ok(!a.text.includes('Asha Sharma'), 'child records are not in the profile');
+
+  const notGuardian = await call('GET', '/api/guardian/profile');
+  assert.equal(notGuardian.status, 401, 'signed-out callers get nothing');
+});
