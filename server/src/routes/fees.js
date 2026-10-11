@@ -8,6 +8,8 @@ import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { requirePermission, hasPermission } from '../services/permissions.js';
 import { accessibleLink, visibleChildren } from '../services/guardians.js';
 import * as ledger from '../services/fees/ledger.js';
+import { listSignoffs, decideSignoff } from '../services/fees/signoff.js';
+import { renderReceiptPdf } from '../services/fees/receiptPdf.js';
 import { FeeError } from '../services/fees/ledger.js';
 import { GatewayError } from '../services/fees/khalti.js';
 import { startOnlinePayment, verifyKhaltiReturn } from '../services/fees/online.js';
@@ -127,6 +129,29 @@ feesRouter.get('/receipts/:receiptNo', requireAuth, requirePermission('fees.view
   res.json(receipt);
 }));
 
+async function sendReceiptPdf(res, view) {
+  const buf = await renderReceiptPdf(view);
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `inline; filename="receipt-${view.receipt_no}.pdf"`);
+  res.setHeader('Cache-Control', 'no-store');
+  res.send(buf);
+}
+
+feesRouter.get('/receipts/:receiptNo/pdf', requireAuth, requirePermission('fees.view'), wrap(async (req, res) => {
+  const view = ledger.receiptView(Number(req.params.receiptNo));
+  if (!view) throw new FeeError(404, 'Receipt not found');
+  await sendReceiptPdf(res, view);
+}));
+
+// Daily fee audit sign-off (Finance Manager). Viewing needs fees.view; deciding needs fees.signoff_daily.
+feesRouter.get('/signoffs', requireAuth, requirePermission('fees.view'), wrap((req, res) => {
+  res.json({ signoffs: listSignoffs(req.query) });
+}));
+
+feesRouter.post('/signoffs/:id/decision', requireAuth, requirePermission('fees.signoff_daily'), wrap((req, res) => {
+  res.json(decideSignoff(idParam(req), req.body || {}, req));
+}));
+
 // Staff numbers (EmpID). Admin only. Staff accounts only.
 feesRouter.put('/staff/:id/employee-no', requireAuth, requireAdmin, wrap((req, res) => {
   res.json(ledger.setEmployeeNo(idParam(req), req.body?.employee_no, req));
@@ -178,6 +203,13 @@ feesRouter.post('/jobs/daily/run', requireAuth, requirePermission('fees.manage')
 }));
 
 // ---------- guardian portal ----------
+
+// A receipt for a child the guardian may see with fee access. Anyone else gets 404.
+feesPortalRouter.get('/fees/receipts/:receiptNo/pdf', requireAuth, requireGuardian, wrap(async (req, res) => {
+  const view = ledger.receiptView(Number(req.params.receiptNo));
+  if (!view || !accessibleLink(req.user.id, view.student_id, 'can_view_fees')) throw new FeeError(404, 'Receipt not found');
+  await sendReceiptPdf(res, view);
+}));
 
 // Overpayment notices and credit balance for each child the guardian may see (version 1: in-app, with the email notice).
 feesPortalRouter.get('/fees/alerts', requireAuth, requireGuardian, wrap((req, res) => {

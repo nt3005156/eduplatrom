@@ -104,7 +104,6 @@ before(async () => {
   addUser('viewOnlyGuardian', { role: 'guardian', roleKey: 'guardian' });
   addUser('restrictedGuardian', { role: 'guardian', roleKey: 'guardian' });
   addUser('requester', { role: 'teacher', roleKey: 'fee_clerk' });
-  addUser('fmgr', { role: 'teacher', roleKey: 'finance_manager' });
   sessionId = Number(db.prepare("INSERT INTO academic_sessions (name, start_date, end_date) VALUES ('2026-2027','2026-04-01','2027-03-31')").run().lastInsertRowid);
   db.prepare(`INSERT INTO guardian_students (guardian_id, student_id, can_view_fees, can_pay_fees) VALUES (?,?,1,1)`).run(ID.payingGuardian, ID.kid);
   db.prepare(`INSERT INTO guardian_students (guardian_id, student_id, can_view_fees, can_pay_fees) VALUES (?,?,1,1)`).run(ID.payingGuardian, ID.kid2);
@@ -386,10 +385,7 @@ test('a concession cannot push an invoice below what was already paid, and it st
     student_id: ID.kid2, session_id: sessionId, period: 'Term 1', fee_head_id: headTui, amount_paisa: 1500000, reason: 'Full tuition waiver requested',
   });
   assert.equal(req.status, 201);
-  // This is above the high-value threshold, so only the Finance Manager can approve it. The admin is refused first.
-  const byAdmin = await call('admin', 'POST', `/api/fees/concessions/${req.body.id}/decision`, { decision: 'approve' });
-  assert.equal(byAdmin.status, 403, JSON.stringify(byAdmin.body));
-  const r = await call('fmgr', 'POST', `/api/fees/concessions/${req.body.id}/decision`, { decision: 'approve' });
+  const r = await call('admin', 'POST', `/api/fees/concessions/${req.body.id}/decision`, { decision: 'approve' });
   assert.equal(r.status, 409, JSON.stringify(r.body));
   const row = db.prepare('SELECT status FROM concessions WHERE id = ?').get(req.body.id);
   assert.equal(row.status, 'requested', 'rolled back: still requested');

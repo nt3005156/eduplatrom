@@ -285,7 +285,7 @@ Dependency order: Phase 0 blocks everything. Phase 1 blocks 2, 3, 6. Phase 3 blo
 
 ### Phase 3: Fees, invoices, receipts, and online payment
 
-**Status (2026-10-11): backend complete in code and tested, including dual control for cash and bank payments, overpayment credit with automatic refund rules, tiered escalation of exceptions and overpayments (NPR 10,000 and 50,000), and the daily reconciliation job (full server suite 253 of 253, including staff numbers, the Finance Officer, Lead Cashier, and Finance Manager roles, concession tiers, the in-app overpayment notice, and the mandatory overpayment email through the outbox). Exit gate not met:** needs a Khalti sandbox merchant account, a month of reconciled pilot data, and a first paying school. The parent payment screen, admin fee screens, dues reminders, and receipt PDF are not built. Details and the list of open items: [PHASE3_STATUS.md](PHASE3_STATUS.md).
+**Status (2026-10-12): backend complete in code and tested, including dual control for cash and bank payments (a clerk records, the Finance Officer verifies), EmpID on receipts and audit rows, overpayment credit with automatic refund rules, the overpayment notice in the app and by email (a mandatory fee notice through the outbox), tiered escalation of exceptions and overpayments (NPR 10,000 and 50,000), the daily reconciliation job with the Finance Manager's daily sign-off queue, concession tiers with the system admin as fallback, and the receipt PDF in English. The guardian dashboard shows credit and notices (client build passes). Full server suite 259 of 259. **Exit gate not met:** needs a Khalti sandbox merchant account, a month of reconciled pilot data, a first paying school, and a real SMTP test send. Not built: the parent payment button, admin fee screens, the sign-off screen, dues reminders, the Nepali receipt, and the background sweep for unreturned payments. Details and open items: [PHASE3_STATUS.md](PHASE3_STATUS.md).
 
 **Goal.** Collect school fees through Khalti (the first gateway, chosen by the user; eSewa is deferred as a later premium integration), record every payment, and show dues to parents. This is the feature schools pay for.
 
@@ -307,7 +307,7 @@ Dependency order: Phase 0 blocks everything. Phase 1 blocks 2, 3, 6. Phase 3 blo
 - Daily reconciliation job: compare provider settlements with our `payments` table; list mismatches.
 - Dues report, aging buckets (0–30, 31–60, 61–90, 90+), collection rate by class.
 - Cash and bank deposit recording for payments outside the gateway.
-- Receipt PDF generation (Nepali and English).
+- Receipt PDF generation (Nepali and English). Built in English (2026-10-12). The Nepali version is not built.
 
 **How it improves the system.**
 - Parents pay from their phone. Schools see dues without chasing.

@@ -6,7 +6,8 @@
     "test": "node --test test/*.test.js",
     "start": "node src/index.js",
     "backup": "node scripts/backup.js",
-    "restore": "node scripts/restore.js"
+    "restore": "node scripts/restore.js",
+    "smtp:check": "node scripts/smtp-check.js"
   },
   "keywords": [],
   "author": "",
@@ -25,6 +26,7 @@
     "morgan": "^1.11.0",
     "multer": "^2.2.0",
     "nodemailer": "^10.1.0",
+    "pdfkit": "^0.20.2",
     "sanitize-html": "^2.17.5",
     "uuid": "^14.0.1"
   },

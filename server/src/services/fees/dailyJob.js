@@ -20,6 +20,7 @@
 import db from '../../db/index.js';
 import { logAudit } from '../../utils/audit.js';
 import { reconcile, todayNepal, autoRefundCredits } from './ledger.js';
+import { createDailySignoff, pendingVerificationCount } from './signoff.js';
 import { escalationTiers, tierFor, formatNPR } from './money.js';
 import { send, ProviderError } from '../messaging/providers.js';
 
@@ -185,6 +186,12 @@ export async function runDailyFeeJob({ now = new Date(), force = false } = {}) {
       settlement_checked: rec.settlement_checked,
     };
 
+    createDailySignoff({
+      run_date: today, reconciled_date: yesterday, payments_count: rec.totals.payment_count,
+      payments_paisa: rec.totals.payments_paisa, refunds_paisa: rec.totals.refunds_paisa, mismatches: rec.mismatches.length,
+      open_exceptions: open.length, pending_verifications: pendingVerificationCount(), overpayments: overpayments.length,
+      automatic_refunds: refunds.length, summary,
+    });
     const financeBody = [
       `Fee reconciliation for ${yesterday}. All amounts are in NPR.`,
       '',

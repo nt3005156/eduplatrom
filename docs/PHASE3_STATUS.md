@@ -2,7 +2,7 @@
 
 Date: 2026-10-11. Roadmap section: [PRODUCTION_ROADMAP.md, Phase 3](PRODUCTION_ROADMAP.md#phase-3-fees-invoices-receipts-and-online-payment).
 
-**Status: backend complete in code and tested. Server suite 253 of 253 (Phase 3 tests across three files). The phase exit gate is not met.** The three controls decided on 2026-10-11 are built (section 10). The gate needs a live Khalti merchant account (sandbox end to end), a month of real fee data reconciled to the penny at a pilot school, and a first paying school. None of these can be done from this environment. The parent-facing payment screen, the admin fee screens, and the receipt PDF are not built.
+**Status: backend complete in code and tested. Server suite 259 of 259 (exit 0). The phase exit gate is not met.** The controls decided on 2026-10-11 and 2026-10-12 are built (section 10): dual control, overpayment credit and its email, tiered reconciliation and the daily sign-off queue, EmpID on receipts, concession tiers, and the receipt PDF (English). The guardian dashboard shows credit and notices (client build passes; not yet tested in a browser). The gate needs a live Khalti merchant account (sandbox end to end), a month of real fee data reconciled to the penny at a pilot school, a first paying school, and a real SMTP test send with the App Password. None of these can be done from this environment. The parent payment button, the admin fee screens, and the sign-off screen are not built.
 
 Khalti is the only gateway. It stays in `none` mode (no network calls, online payment refused with 503) until `KHALTI_SECRET_KEY` is set. eSewa is deferred, as decided.
 
@@ -13,14 +13,16 @@ Khalti is the only gateway. It stays in `none` mode (no network calls, online pa
 | Area | File | What it does |
 |---|---|---|
 | Permissions | `server/src/db/seedRbac.js` | `fees.view`, `fees.collect`, `fees.manage` (staff roles, per matrix). New roles: `finance_officer` (view and verify, no collect) and `lead_cashier` (view and collect, no verify). `fees.approve_concession` and `fees.refund` are `admin_only`, hard-locked to the system admin in `hasPermission`. Academic head gets `fees.view` by default. |
-| Schema | `server/src/db/schema.sql` | `fee_heads`, `fee_structures`, `invoices`, `invoice_items`, `concessions`, `payments` (append-only, triggers block UPDATE and DELETE), `receipts` (unique `receipt_no`), `gateway_transactions` (unique `pidx`, unique `provider_transaction_id`, unique `purchase_order_id`). |
+| Schema | `server/src/db/schema.sql` | `fee_heads`, `fee_structures`, `invoices`, `invoice_items`, `concessions`, `payments` (append-only, triggers block UPDATE and DELETE), `receipts` (unique `receipt_no`), `gateway_transactions` (unique `pidx`, unique `provider_transaction_id`, unique `purchase_order_id`), `payment_verifications`, `credit_ledger` (append-only), `fee_job_runs`, `reconciliation_exceptions`, `fee_dispatches`, `fee_notices` (in-app overpayment notices), `fee_daily_signoffs` (daily audit sign-off). `message_outbox` has the `event_kind` `fee_notice` and the per-row `mandatory` flag. Staff numbers are the `employee_no` column on `users`, snapshotted on the rows above. |
 | Ledger | `server/src/services/fees/ledger.js` | Fee heads and structures, invoice generation, concession rules, cash and bank payments, refunds, dues report, collection report, reconciliation. |
 | Khalti client | `server/src/services/fees/khalti.js` | The only module that calls Khalti. Config from env. Fake client injectable for tests. |
 | Online flow | `server/src/services/fees/online.js` | Starts a payment and verifies returns by server-side lookup. Records a payment only when the lookup confirms it. |
 | Routes (staff) | `server/src/routes/fees.js`, mounted at `/api/fees` | Heads, structures, generate invoices, invoices, payments, refunds, concessions, dues and collection reports, reconcile, Khalti return. |
 | Routes (guardian) | same file, mounted at `/api/guardian` | `GET /api/guardian/fees/invoices`, `GET /api/guardian/fees/invoices/:id`, `POST /api/guardian/fees/invoices/:id/pay-online`. Inside the existing guardian allowlist. |
-| Controls | `server/src/services/fees/dailyJob.js`, `ledger.js`, `money.js`, `notices.js` | Dual control for cash and bank, overpayment credit, automatic refunds, daily reconciliation job, tiered escalation, NPR formatting, overpayment notice template. See section 10. |
-| Tests | `server/test/fees.test.js` (31), `server/test/fees-controls.test.js` (12), `server/test/fees-policy.test.js` (5) | Khalti is a fake. The job takes a fixed `now`, so the tests do not depend on the clock. |
+| Controls | `server/src/services/fees/dailyJob.js`, `ledger.js`, `money.js`, `notices.js`, `notifications.js`, `signoff.js`, `receiptPdf.js` | Dual control for cash and bank, overpayment credit, automatic refunds, daily reconciliation job, tiered escalation, daily sign-off queue, NPR formatting, overpayment notice and email, receipt PDF. See section 10. |
+| Guardian banner | `client/src/pages/guardian/FeeAlerts.jsx`, used by `GuardianHome.jsx` | Shows each linked child's credit balance and unread fee notices, with a "Got it" action. |
+| SMTP check | `server/scripts/smtp-check.js` (`npm run smtp:check -- <address>`) | Sends one test message through the real relay settings and prints the result. See section 10.3. |
+| Tests | `server/test/fees.test.js` (31), `server/test/fees-controls.test.js` (21), `server/test/fees-policy.test.js` (5), `server/test/smtp-check.test.js` (3) | Khalti is a fake. The job takes a fixed `now`, so the tests do not depend on the clock. The SMTP check runs against a local SMTP server. |
 
 ## 2. Configuration
 
@@ -98,7 +100,7 @@ Guardian, under `/api/guardian/fees`: see section 2 of the table above.
 | Check | Result |
 |---|---|
 | `server/test/fees.test.js` | **31 of 31 pass.** Khalti is a fake client at the adapter seam. Concurrency is real (parallel HTTP requests). |
-| Full server suite (`npm test`) | **241 of 241 pass** (198 before Phase 3, 43 new across two files). Exit 0. See section 10.4. |
+| Full server suite (`npm test`) | **259 of 259 pass**, exit 0. Includes the Phase 3 files listed in section 1. See section 10.4. |
 | Syntax check of every new file | Pass |
 
 The fake client is not a test of Khalti's real API. The field names and status strings in `khalti.js` and `online.js` come from public documentation and community guides. They are **not verified against a live merchant account** (see section 6).
@@ -120,13 +122,15 @@ These came from the public docs and guides. Check each one against the Khalti me
 |---|---|
 | Sandbox end-to-end payment on Khalti | **Not met.** Needs a Khalti sandbox merchant account and a public HTTPS `PUBLIC_BASE_URL`. |
 | Sample month reconciled to the penny | **Not met.** The reconcile function is built and tested with small data. A real month needs pilot data and the provider's settlement file. |
-| Receipt PDF (Nepali and English) | **Not built.** Receipts exist as numbers in the database. No PDF is generated. Planned for a later round, as decided. |
-| Parent-facing payment button and fee screens | **Not built.** The guardian API exists. No client page. |
+| Receipt PDF in Nepali | **Not built.** The receipt PDF is built in English only (`GET /api/fees/receipts/:receiptNo/pdf` for staff, and the guardian route). The Nepali version needs a font decision and native-speaker review. |
+| Parent-facing payment button and fee screens | **Not built.** The guardian API exists. The dashboard banner (credit and notices) is built, but there is no payment button or invoice page yet. |
+| Admin sign-off screen | **Not built.** The Finance Manager's daily queue is API only (`GET /api/fees/signoffs`). |
+| Real SMTP test send | **Not run.** Needs the App Password in the server `.env`. Run `npm run smtp:check -- <address>` and report the output. |
 | Admin fee screens (structures, invoice generation, collection, concession approval, dues) | **Not built.** API only. |
 | Dues reminders through the Phase 2 outbox | **Not built.** Roadmap item. |
 | Privacy export of payment history and erasure rules for financial records | **Not built.** Roadmap item. Anonymizing a student still keeps their invoices and payments (foreign keys stay), with the name removed from the user row. |
 | Background sweep for `initiated` attempts that never returned | **Not built.** Needed before pilot. |
-| Daily scheduled reconciliation job | **Built and scheduled** (section 10). It runs in the 00:00–02:00 Nepal window. Real delivery still needs the email provider and recipient addresses to be configured. |
+| Daily scheduled reconciliation job | **Built and scheduled** (section 10). It runs in the 00:00–02:00 Nepal window. Real delivery still needs the email provider, the recipient addresses, and the aliases to exist. |
 | Settlement file import | **Not built.** Reconcile accepts a settlement list in the request body. A file upload and parser are needed once the vendor provides the format. |
 | Gateway merchant approval and licence questions | **For counsel before go-live**, as the roadmap says. Not reviewed. |
 | Phase 3 exit gate (first paying school, a month of reconciled data) | **Not met.** |
@@ -158,11 +162,11 @@ The user answered four questions: overpayments (credit, with a refund on request
 - **Settlement rule.** An invoice's settled amount is its payments, minus the part of a payment that became credit, minus the credit applied to it. Payments and credit are never counted twice. A test caught an earlier version that did count them twice.
 - **Notice wording and currency (NPR, confirmed by the user).** Version 1 has **no refund link**. Its wording: "An overpayment of NPR 2,500.00 was detected and credited to your account." It goes on to say the credit is applied to the next fee invoice, and that a direct bank refund or physical refund is handled by contacting the school accounts desk. The template is `overpaymentNotice` in `services/fees/notices.js`. The refund link is planned for version 2.
 - **Channels (the user's answer).** Two channels:
-  - **In-app notice (built, API only).** Each overpayment writes a row to `fee_notices`. `GET /api/guardian/fees/alerts` lists, for each linked child, the credit balance and the unseen notices, with the message text. `POST /api/guardian/fees/notices/:id/seen` marks a notice seen. The guardian portal banner or badge on login is **not built** (no client page yet).
-  - **Email (built, through the outbox).** Each overpayment queues one email per guardian who may view fees. The row is written in the same database transaction as the payment, so the payment and its notice are saved together or not at all. Event kind `fee_notice`, template `fees.overpayment.v1`, subject "Overpayment credited to your account". The guardian gets the NPR amount and the accounts-desk wording, with no link.
-  - **Mandatory, as approved on 2026-10-12.** Opt-outs do not block a `fee_notice` (`MANDATORY_EVENT_KINDS` in `services/messaging/outbox.js`). Attendance and notice messages still honor opt-outs. The notice still obeys the pause switch, the email channel switch, and the monthly quota. A queued notice not sent within 72 hours expires (the outbox rule). The in-app notice stays. A guardian with no valid email is recorded as `skipped_no_contact`. A repeat for the same notice is ignored by the dedupe key.
+  - **In-app notice (built).** Each overpayment writes a row to `fee_notices`. `GET /api/guardian/fees/alerts` lists, for each linked child, the credit balance and the unseen notices, with the message text. `POST /api/guardian/fees/notices/:id/seen` marks a notice seen. The guardian dashboard shows them in a banner (`FeeAlerts.jsx`), with a "Got it" button that marks the notice seen. The client build passes; the banner has not been checked in a browser.
+  - **Email (built, through the outbox).** Each overpayment queues one email per guardian who may view fees. The row is written in the same database transaction as the payment, so the payment and its notice are saved together or not at all. Event kind `fee_notice`, template `fees.overpayment.v1` (registered in `TEMPLATE_IDS`, `services/messaging/templates.js`), subject "Overpayment credited to your account". The guardian gets the NPR amount and the accounts-desk wording, with no link.
+  - **Mandatory, as approved on 2026-10-12.** Opt-outs do not block a row whose `mandatory` flag is set. The flag is a column on `message_outbox`, and the overpayment email sets it explicitly. `enqueue` refuses the flag on any kind other than `fee_notice`. The send-time opt-out check still runs for every other row, so attendance and notice messages still honor opt-outs. The notice still obeys the pause switch, the email channel switch, and the monthly quota. A queued notice not sent within 72 hours expires (the outbox rule). The in-app notice stays. A guardian with no valid email is recorded as `skipped_no_contact`. A repeat for the same notice is ignored by the dedupe key.
   - **Counsel to confirm** that a mandatory exemption from opt-outs is acceptable for each market before go-live.
-- **Credit is shown** on each invoice (`credit_balance_paisa` in the invoice detail) and on the guardian alerts.
+- **Credit is shown** on each invoice (`credit_balance_paisa` in the invoice detail), on the guardian alerts, and on the guardian dashboard.
 - **Not built:** the refund-preference page and the link in the email (version 2).
 
 ### 10.2 Dual control: cash and bank payments need a second person
@@ -172,9 +176,9 @@ The user answered four questions: overpayments (credit, with a refund on request
 - **The counter person cannot finalize their own item** (403). Both user IDs and names are kept on the row, and the audit entry `payment_verified` records `recorded_by` and `verified_by`.
 - **Bank references are unique.** The same slip cannot be recorded twice. Cash has no reference, so duplicate cash entries are caught by the second person, not by the system.
 - **Automated bank feeds and gateway payments are exempt**, as the user answered. Khalti payments post only after the server-side lookup (section 3).
-- **Who holds `fees.verify_payment`.** Granted by default to the **Finance Officer** role (`finance_officer`) only. Verification is kept apart from recording: the **Lead Cashier** (`lead_cashier`) records cash and bank money, and the Finance Officer verifies it. The Finance Officer has no `fees.collect`. The **Finance Manager** (`finance_manager`) approves high-value concessions (10.7). Daily audit sign-off by the Finance Manager is **not built**. The system admin keeps all fee permissions, as before.
+- **Who holds `fees.verify_payment`.** Granted by default to the **Finance Officer** role (`finance_officer`) only. Verification is kept apart from recording: the **Lead Cashier** (`lead_cashier`) records cash and bank money, and the Finance Officer verifies it. The Finance Officer has no `fees.collect`. The **Finance Manager** (`finance_manager`) approves high-value concessions (10.7). The Finance Manager signs off each day (`fees.signoff_daily`, section 10.3). The system admin keeps all fee permissions, as before.
 - **Staff numbers (EmpID), built.** Each staff account can have a unique staff number (`users.employee_no`, 1 to 20 letters, digits, or hyphens, stored uppercase). Only the system admin sets it: `PUT /api/fees/staff/:id/employee-no`. Students and guardians cannot have one. The number is **snapshotted** when a row is written: on payments, credit rows, verification rows (recorder and decider), reconciliation resolutions, and the audit log. A later change does not rewrite older rows, so an old receipt keeps the number it was printed with. An account without a number prints as `Name (no staff number)`.
-- **Receipts show who processed them.** `GET /api/fees/receipts/:receiptNo` (`fees.view`) returns the receipt with `processed_by` (`EMP-014 / Name`) and `verified_by`. The printed "Processed by:" line on a PDF is **not built** (no receipt PDF yet).
+- **Receipts show who processed them.** `GET /api/fees/receipts/:receiptNo` (`fees.view`) returns the receipt with `processed_by` (`EMP-014 / Name`) and `verified_by`. The receipt PDF prints the same "Processed by" line (and "Verified by" when there is a second person). The PDF also has the student details, the fee breakdown, and the transaction status.
 - **Not built:** a printed draft receipt. The `DRAFT-n` number is shown in the API response only.
 
 ### 10.3 Daily reconciliation, tiered escalation, and dispatch
@@ -216,6 +220,8 @@ SMTP_PASS=<16-character app password>
   - **Test before go-live.** Send a test from the admin messaging page or `POST /api/messages/test` with `{ "channel": "email", "recipient": "<an address you own>" }`. Status `sent` means the relay accepted the message. `failed` with "SMTP login rejected" means the App Password was not accepted. The fallback is "Only accept mail from the specified IP addresses" with the server's static outbound IP. Then leave `SMTP_USER` and `SMTP_PASS` unset.
   - **Source.** Google Workspace Help, "Route outgoing SMTP relay messages through Google" (support.google.com/a/answer/2956491, now hosted at knowledge.workspace.google.com). Read on 2026-10-12. This replaces the earlier third-party guides as the basis for these steps.
   - **Not verified here:** a real relay exchange, and whether the App Password is accepted by the relay. The tests run against a local SMTP server.
+- **Daily sign-off queue (built, API only).** The daily job creates one sign-off row per reconciled school date, inside the same claimed run, so a retry does not create a second one. The row holds the day's summary: payments, receipts, open exceptions, pending verifications, and automatic refunds. The Finance Manager (`fees.signoff_daily`) reads it at `GET /api/fees/signoffs` and decides with `POST /api/fees/signoffs/:id/decision` (`sign_off` or `return`). Returning needs a note of at least 3 characters. Signing off a day with open exceptions or pending verifications needs one too. A decided day cannot be decided again (409).
+- **SMTP check (built).** `npm run smtp:check -- <address>` (in `server/`) sends one test message through the configured relay. Exit 0 means the relay accepted it. Exit 1 means it refused (a hint is printed). Exit 2 means SMTP is not configured or no address was given. It prints the relay response and never the password. This is the test to run before go-live.
 - **Unhandled API errors.** The ops summary counts Khalti lookups that failed (each is an audit row, `lookup_unavailable`). Other errors are not counted.
 - **Amounts in every report** use NPR with Nepali grouping, for example `NPR 1,00,000.00` (`services/fees/money.js`).
 - **Not built:** a settlement file import (Khalti's settlement format is not known), and a bank statement feed. The settlement check runs only when a settlement list is supplied, and the report says so when it is skipped.
@@ -224,13 +230,15 @@ SMTP_PASS=<16-character app password>
 
 | Check | Result |
 |---|---|
-| `server/test/fees-controls.test.js` | **18 of 18 pass.** Also covers concession tiers (the Finance Officer approves a standard concession, the Finance Manager alone approves a high-value one, the admin is refused, rejection allowed, the audit entry records the tier), and the overpayment email (queued as a mandatory notice, sent despite a guardian opt-out, attendance opt-out still holds, no-address and duplicate cases). Earlier: staff numbers, Finance Officer separation, receipts, guardian in-app notices, and 12 of 12 control tests.
+| `server/test/fees-controls.test.js` | **21 of 21 pass.** Covers concession tiers (the Finance Officer approves a standard concession, the Finance Manager approves a high-value one, the system admin approves one only as the recorded fallback, rejection allowed, the audit entry records the tier), the overpayment email (queued as a mandatory notice, sent despite a guardian opt-out, attendance opt-out still holds, the mandatory flag is refused on other kinds, no-address and duplicate cases), the receipt PDF (staff and guardian access, and the text on it), and the daily sign-off (return needs a note, a decided day cannot be decided again). Earlier: staff numbers, Finance Officer separation, receipts, guardian in-app notices. |
+| `server/test/smtp-check.test.js` | **3 of 3 pass.** Real SMTP exchange against a local server: accepted, refused, and not configured. |
 | `server/test/fees.test.js` | **31 of 31 pass.** Cash and bank now finalize through verification. The concurrency test finalizes 12 cash items at once and checks that receipt numbers have no gaps. |
 | `server/test/fees-policy.test.js` | **5 of 5 pass.** NPR formatting with lakh grouping, tier boundaries and configuration, the overpayment notice wording (NPR, no link in version 1) and its amount check. |
-| Full server suite (`npm test`) | **253 of 253 pass**, exit 0. |
-| Migrations on a copy of the existing dev database | The staff-number columns are added. The outbox table is rebuilt once to accept `fee_notice`, with every row kept and both indexes restored. A second boot is clean. |
+| Full server suite (`npm test`) | **259 of 259 pass**, exit 0. |
+| Client build | `vite build` in `client/`, exit 0 (includes `FeeAlerts.jsx`). |
+| Migrations on a copy of the existing dev database | The staff-number columns are added. The outbox table is rebuilt once to accept `fee_notice`, with every row kept and both indexes restored. The `mandatory` column is then added. A second boot is clean. |
 | Migration on an existing database | The new staff-number columns are added to a copy of the dev database with its data intact, and a second boot is clean. |
-| Schema | `schema.sql` executes on a fresh SQLite file: 5 tables, 4 append-only triggers. |
+| Schema | `schema.sql` executes on a fresh SQLite file: the 15 fee tables and the outbox table, with 4 triggers (the append-only rules). Checked again after the `mandatory` change. |
 
 Test note: the overpayment tests write with the real clock, so an earlier overpayment can fall on the same school date as a test run. The escalation test counts those first, so it does not depend on the date.
 
@@ -242,14 +250,18 @@ Answered (2026-10-12):
 - **EmpID** on each staff account, on receipts, and in the audit trail.
 - **Overpayment notice:** in-app and by email, with no refund link in version 1. Email is mandatory (no opt-out) and goes through the outbox.
 - **SMTP:** App Password, with the verification step in section 2.
-- **Concession tiers:** standard at or below NPR 5,000 is approved by the Finance Officer or system admin. Above NPR 5,000 needs the Finance Manager (10.7).
+- **Concession tiers:** standard at or below NPR 5,000 is approved by the Finance Officer or system admin. Above NPR 5,000 needs the Finance Manager, with the system admin as fallback (10.7). The NPR 5,000 value and the basis (the concession amount, not the invoice total) are **provisional** until the user confirms them.
+
+Decided and built:
+- **System admin fallback** for high-value concessions, when the Finance Manager is unavailable. Recorded in the audit entry (`fallback_approver`).
+- **Finance Manager daily sign-off.** Built as a queue of daily summaries (10.3). A sign-off screen is not built.
+- **Guardian banner** on the dashboard (10.1). The API is there, and the banner is built but not yet tested in a browser.
 
 Still open:
-1. **System admin and high-value concessions.** The system admin cannot approve a high-value concession, by design. If no Finance Manager exists or is available, those requests wait. Should the admin be a fallback? Decide before pilot.
-2. **Finance Manager daily audit sign-off.** Not built. Say what it signs (the reconciliation summary, or the day's receipts) and whether it is a button or an email reply.
-3. **Counsel.** Confirm that the mandatory notice (no opt-out) is acceptable in each market.
-4. **SMTP test.** Run the test send in section 2 and report the result. If the App Password is rejected, IP allowlisting is the fallback.
-5. **Guardian banner UI.** The client banner and badge are not built. The API is ready.
+1. **Counsel.** Confirm that the mandatory notice (no opt-out) is acceptable in each market.
+2. **SMTP test.** Run `npm run smtp:check -- <address>` in `server/` with the App Password in `.env`, and report the output. If the App Password is rejected, use IP allowlisting instead, as the user has said.
+3. **Concession threshold.** Confirm NPR 5,000 and that the basis is the concession amount.
+4. **Sign-off screen.** Confirm whether the Finance Manager reviews the daily queue in the app, or whether a printed or emailed summary is needed too.
 
 ### 10.6 New endpoints
 
@@ -262,8 +274,12 @@ Still open:
 | POST `/api/fees/invoices/:id/apply-credit` | `fees.collect` | Applies available credit to an existing invoice |
 | GET `/api/fees/reconciliation/exceptions?status=open\|resolved` | `fees.view` | |
 | GET `/api/fees/concessions?status=&tier=standard\|high` | `fees.view` | Each row has `tier`. High means above `FEES_CONCESSION_HIGH_PAISA`. |
-| POST `/api/fees/concessions/:id/decision` | `fees.approve_concession`, plus `fees.approve_concession_high` above the threshold | `approve` or `reject`. The requester cannot approve their own. The system admin cannot approve a high-value one. |
+| POST `/api/fees/concessions/:id/decision` | `fees.approve_concession`, plus `fees.approve_concession_high` to approve above the threshold (the system admin passes as fallback) | `approve` or `reject`. The requester cannot approve their own. Approving a high-value one as the admin is recorded as `fallback_approver`. |
 | GET `/api/fees/receipts/:receiptNo` | `fees.view` | Receipt with `processed_by` and `verified_by` (EmpID / name) |
+| GET `/api/fees/receipts/:receiptNo/pdf` | `fees.view` | Receipt PDF (English) |
+| GET `/api/guardian/fees/receipts/:receiptNo/pdf` | guardian (`can_view_fees`) | Receipt PDF for a linked child only |
+| GET `/api/fees/signoffs` | `fees.view` | Daily sign-off queue |
+| POST `/api/fees/signoffs/:id/decision` | `fees.signoff_daily` (Finance Manager) | `sign_off` or `return`, with a note where needed |
 | PUT `/api/fees/staff/:id/employee-no` | system admin | Sets a unique staff number on a staff account. `{ employee_no }`, or empty to clear. Audited. |
 | GET `/api/guardian/fees/alerts` | guardian (`can_view_fees`) | Per linked child: credit balance and unseen notices |
 | POST `/api/guardian/fees/notices/:id/seen` | guardian (`can_view_fees`) | Marks a notice seen. Idempotent. |
@@ -272,11 +288,11 @@ Still open:
 
 ### 10.7 Concession approval tiers
 
-- **Threshold.** `FEES_CONCESSION_HIGH_PAISA`, default 500000 paisa (NPR 5,000). It is compared with the concession amount, not the invoice total. At or below the threshold is **standard**. Above it is **high**. Exactly at the threshold is standard.
+- **Threshold.** `FEES_CONCESSION_HIGH_PAISA`, default 500000 paisa (NPR 5,000). Provisional until confirmed (10.5). It is compared with the concession amount, not the invoice total. At or below the threshold is **standard**. Above it is **high**. Exactly at the threshold is standard.
 - **Standard.** Approved by anyone with `fees.approve_concession`: the Finance Officer, the Finance Manager, or the system admin.
-- **High-value.** Approval needs `fees.approve_concession_high`, which only the Finance Manager holds by default. The system admin is excluded in code, even though the admin passes other permission checks. Anyone with `fees.approve_concession` may **reject** a high-value request.
+- **High-value.** Approval needs `fees.approve_concession_high`, which the Finance Manager holds by default. The system admin is the fallback approver: the admin passes the permission check, and the audit entry records `fallback_approver: true`. Anyone with `fees.approve_concession` may **reject** a high-value request.
 - **Maker-checker.** The requester can never approve their own request, at any tier. The check runs before the tier check.
 - **Reading of the rule.** "Processed directly" by the Finance Officer or admin is read as: no Finance Manager step is needed, but the approver must still be a different person from the requester. The user's standing maker-checker rule is kept.
-- **Queue.** `GET /api/fees/concessions?status=requested&tier=high` is the Finance Manager's pending-approval queue.
+- **Queue.** `GET /api/fees/concessions?status=requested&tier=high` is the Finance Manager's pending-approval queue. It is an API list, not a screen yet.
 - **Audit.** The `concession_approved` entry records the tier.
-- **Open:** see 10.5, item 1.
+- **Admin fallback:** decided and built (10.5).

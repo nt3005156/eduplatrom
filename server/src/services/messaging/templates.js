@@ -1,7 +1,12 @@
 // Message text for parent alerts. Pure functions, so they are easy to test.
 // The Nepali text is a first draft. A native speaker must review it before a pilot.
 
-export const TEMPLATE_IDS = { absent: 'attendance.absent.v1', late: 'attendance.late.v1', notice: 'notice.v1' };
+export const TEMPLATE_IDS = {
+  absent: 'attendance.absent.v1',
+  late: 'attendance.late.v1',
+  notice: 'notice.v1',
+  overpayment: 'fees.overpayment.v1',
+};
 
 function english(kind, { student, date, school }) {
   if (kind === 'absent') return `${school}: ${student} was marked ABSENT on ${date}. Contact the school if this is wrong.`;

@@ -8,8 +8,9 @@
 //  - An absence alert is not sent if the register was corrected before sending, or if the
 //    guardian's access to that child was removed.
 //  - Pausing alerts (alerts_enabled = 0) stops all sending. Nothing is lost.
-//  - Mandatory fee notices (event_kind fee_notice, e.g. an overpayment credit) are transactional statements,
-//    so opt-outs do not block them. They still obey the pause switch, the channel switch, and the quota.
+//  - A mandatory row (mandatory = 1, only for event_kind fee_notice, e.g. an overpayment credit) is a transactional
+//    statement, so opt-outs do not block it. The flag is explicit on the row; the send-time opt-out check is not
+//    skipped for any other row. Mandatory rows still obey the pause switch, the channel switch, and the quota.
 //
 // Known limit: if the process dies after a provider accepted a message but before the database
 // was updated, the message is sent again on recovery. Providers that support idempotency keys
@@ -25,7 +26,7 @@ const MAX_QUEUE_AGE_HOURS = 72;
 const SENDING_STALE_MINUTES = 5;
 const NOT_CONFIGURED_RETRY_SECONDS = 600;
 export const CHANNELS = ['sms', 'whatsapp', 'email'];
-/** Event kinds that opt-outs do not block. Transactional statements only. Not marketing, and not reminders. */
+/** Only this event kind may be mandatory (opt-outs do not block it). Transactional statements only. */
 export const MANDATORY_EVENT_KINDS = ['fee_notice'];
 
 const sqlTime = ms => new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
@@ -85,14 +86,17 @@ export function purgeOldMessages(days = RETENTION_DAYS) {
  * contact_missing = true records a skipped row, so the admin can see which guardians have no contact.
  */
 export function enqueue({ channel, recipient = null, user_id = null, student_id = null, template_id, subject = '', body,
-  dedupe_key, event_kind, event_date = null, event_status = null, contact_missing = false }) {
+  dedupe_key, event_kind, event_date = null, event_status = null, contact_missing = false, mandatory = false }) {
+  if (mandatory && !MANDATORY_EVENT_KINDS.includes(event_kind)) {
+    throw new Error(`only ${MANDATORY_EVENT_KINDS.join(', ')} messages can be mandatory`);
+  }
   const status = contact_missing ? 'skipped_no_contact' : 'queued';
   const info = db.prepare(`
     INSERT OR IGNORE INTO message_outbox
-      (channel, recipient, user_id, student_id, template_id, subject, body, dedupe_key, event_kind, event_date, event_status, status)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      (channel, recipient, user_id, student_id, template_id, subject, body, dedupe_key, event_kind, event_date, event_status, mandatory, status)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     channel, recipient, user_id, student_id, template_id, subject, body, dedupe_key,
-    event_kind, event_date, event_status, status);
+    event_kind, event_date, event_status, mandatory ? 1 : 0, status);
   return { inserted: info.changes > 0, id: info.lastInsertRowid };
 }
 
@@ -147,7 +151,7 @@ export async function processOutbox({ limit = 100 } = {}) {
     const channelOn = config[`${row.channel}_enabled`];
     if (!channelOn) { counts.held++; continue; }
 
-    if (!MANDATORY_EVENT_KINDS.includes(row.event_kind) && isOptedOut(row.recipient, row.channel)) {
+    if (!row.mandatory && isOptedOut(row.recipient, row.channel)) {
       db.prepare(`UPDATE message_outbox SET status = 'skipped_optout', updated_at = datetime('now') WHERE id = ?`).run(row.id);
       counts.skipped++; continue;
     }

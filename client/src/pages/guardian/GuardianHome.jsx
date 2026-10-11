@@ -4,6 +4,7 @@ import { ChevronRight, CalendarCheck, Megaphone, Lock, UserRound } from 'lucide-
 import api from '../../api/client.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import GuardianLayout from './GuardianLayout.jsx';
+import FeeAlerts from './FeeAlerts.jsx';
 
 function pctColor(p) {
   if (p === null || p === undefined) return 'var(--text-faint)';
@@ -29,6 +30,7 @@ export default function GuardianHome() {
 
   return (
     <GuardianLayout title={`Hello, ${user?.name?.split(' ')[0] || 'there'}`}>
+      <FeeAlerts />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '4px 0 10px' }}>
         <h4>Your children</h4>
         <Link to="/guardian/profile" className="btn btn-ghost btn-sm"><UserRound size={14} /> My profile</Link>

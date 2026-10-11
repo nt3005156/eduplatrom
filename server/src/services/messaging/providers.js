@@ -190,9 +190,9 @@ async function sendEmail({ recipient, subject, body }) {
   }
   try {
     const info = await smtpTransport().sendMail({ from: process.env.SMTP_FROM, to: recipient, subject, text: body });
-    return { provider_message_id: info.messageId || null, cost_units: 1 };
+    return { provider_message_id: info.messageId || null, cost_units: 1, response: info.response || null };
   } catch (err) {
-    if (err.code === 'EAUTH') throw new ProviderError(`SMTP login rejected. Messages are held until SMTP_USER and SMTP_PASS are fixed.`, { notConfigured: true });
+    if (err.code === 'EAUTH') throw new ProviderError(`SMTP login rejected (${err.responseCode || 'EAUTH'}). Messages are held until SMTP_USER and SMTP_PASS are fixed.`, { notConfigured: true });
     const code = Number(err.responseCode);
     // 5xx: the server refused for good (for example, an unknown mailbox). 4xx and connection errors: retry.
     const permanent = code >= 500 && code < 600;

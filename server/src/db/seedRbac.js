@@ -21,7 +21,7 @@ export const ROLES = [
   // Fee roles. Verification and recording are separate roles, so no one can both take and confirm the same money.
   { key: 'finance_officer', label: 'Finance Officer', rank: 3, is_system_role: 1, description: 'Verifies cash and bank payments recorded by the lead cashier. Approves standard concessions. Can view fees. Cannot record payments.' },
   { key: 'lead_cashier', label: 'Lead Cashier', rank: 4, is_system_role: 1, description: 'Receives cash and bank payments at the counter and records them for verification. Cannot verify.' },
-  { key: 'finance_manager', label: 'Finance Manager', rank: 2, is_system_role: 1, description: 'Approves high-value fee concessions above the threshold. Can view fees. Daily audit sign-off is not built yet.' },
+  { key: 'finance_manager', label: 'Finance Manager', rank: 2, is_system_role: 1, description: 'Approves high-value fee concessions above the threshold, and signs off the daily fee audit. Can view fees.' },
 ];
 
 // module groups the permission for the admin's Permission Matrix UI.
@@ -43,7 +43,8 @@ export const PERMISSIONS = [
   { key: 'fees.collect', module: 'fees', label: 'Record cash and bank payments', description: 'Record a cash or bank deposit against an invoice and issue its receipt.' },
   { key: 'fees.manage', module: 'fees', label: 'Manage fee structures and invoices', description: 'Fee heads, class fee structures, invoice generation, and concession requests.' },
   { key: 'fees.approve_concession', module: 'fees', label: 'Approve standard fee concessions', description: 'Approve or reject a standard concession (at or below FEES_CONCESSION_HIGH_PAISA) requested by someone else. Granted to the Finance Officer.', is_dangerous: 1, admin_only: 0 },
-  { key: 'fees.approve_concession_high', module: 'fees', label: 'Approve high-value fee concessions', description: 'Approve a concession above FEES_CONCESSION_HIGH_PAISA. Granted to the Finance Manager only; the system admin cannot approve these.', is_dangerous: 1, admin_only: 0 },
+  { key: 'fees.approve_concession_high', module: 'fees', label: 'Approve high-value fee concessions', description: 'Approve a concession above FEES_CONCESSION_HIGH_PAISA. Granted to the Finance Manager. The system admin is the fallback approver.', is_dangerous: 1, admin_only: 0 },
+  { key: 'fees.signoff_daily', module: 'fees', label: 'Sign off the daily fee audit', description: 'Sign off or return the daily fee reconciliation summary. Granted to the Finance Manager.', is_dangerous: 1, admin_only: 0 },
   { key: 'fees.verify_payment', module: 'fees', label: 'Verify cash and bank payments', description: 'Count and finalize a cash receipt, or verify a bank deposit, that someone else recorded. Granted by default to the Finance Officer role only.', is_dangerous: 1 },
   { key: 'fees.refund', module: 'fees', label: 'Refund payments', description: 'Reverse a payment. Creates an audited negative entry.', is_dangerous: 1, admin_only: 1 },
   // content
@@ -83,7 +84,7 @@ export const PERMISSIONS = [
 export const ROLE_DEFAULTS = {
   finance_officer: { 'fees.view': 'allow', 'fees.verify_payment': 'allow', 'fees.approve_concession': 'allow' },
   lead_cashier: { 'fees.view': 'allow', 'fees.collect': 'allow' },
-  finance_manager: { 'fees.view': 'allow', 'fees.approve_concession': 'allow', 'fees.approve_concession_high': 'allow' },
+  finance_manager: { 'fees.view': 'allow', 'fees.approve_concession': 'allow', 'fees.approve_concession_high': 'allow', 'fees.signoff_daily': 'allow' },
   subject_teacher: {
     'content.create': 'allow', 'content.archive': 'allow',
     'assignment.create': 'allow', 'assignment.publish': 'allow', 'assignment.delete': 'allow',

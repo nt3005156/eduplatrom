@@ -749,7 +749,8 @@ CREATE TABLE IF NOT EXISTS messaging_config (
 INSERT OR IGNORE INTO messaging_config (id) VALUES (1);
 
 -- One row per message. dedupe_key is unique, so enqueueing the same event twice cannot send twice.
--- event_kind 'fee_notice' is a mandatory fee notice (see MANDATORY_EVENT_KINDS in outbox.js). Opt-outs do not block it.
+-- mandatory = 1 marks a transactional statement (a fee notice). Opt-outs do not block a mandatory row; every other row
+-- is checked against the opt-out list at send time. Only event_kind 'fee_notice' may be mandatory (enforced in outbox.js).
 -- Each school has its own database (Phase 7), so there is no school_id column.
 CREATE TABLE IF NOT EXISTS message_outbox (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -764,6 +765,7 @@ CREATE TABLE IF NOT EXISTS message_outbox (
   event_kind TEXT NOT NULL CHECK(event_kind IN ('attendance','notice','fee_notice')),
   event_date TEXT,
   event_status TEXT,
+  mandatory INTEGER NOT NULL DEFAULT 0 CHECK(mandatory IN (0,1)),
   status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN
     ('queued','sending','sent','simulated','failed','skipped_optout','skipped_stale','skipped_no_contact')),
   attempts INTEGER NOT NULL DEFAULT 0,
@@ -1016,4 +1018,27 @@ CREATE TABLE IF NOT EXISTS fee_notices (
   created_at TEXT DEFAULT (datetime('now')),
   seen_at TEXT,
   seen_by INTEGER REFERENCES users(id)
+);
+
+-- Daily fee audit sign-off. One row per reconciled school date. The Finance Manager signs off or returns it.
+-- A row with open exceptions or unverified payments needs a note to be signed off.
+CREATE TABLE IF NOT EXISTS fee_daily_signoffs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  reconciled_date TEXT NOT NULL UNIQUE,
+  run_date TEXT NOT NULL,
+  payments_count INTEGER NOT NULL DEFAULT 0,
+  payments_paisa INTEGER NOT NULL DEFAULT 0,
+  refunds_paisa INTEGER NOT NULL DEFAULT 0,
+  mismatches INTEGER NOT NULL DEFAULT 0,
+  open_exceptions INTEGER NOT NULL DEFAULT 0,
+  pending_verifications INTEGER NOT NULL DEFAULT 0,
+  overpayments INTEGER NOT NULL DEFAULT 0,
+  automatic_refunds INTEGER NOT NULL DEFAULT 0,
+  summary TEXT,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','returned','signed_off')),
+  decided_by INTEGER REFERENCES users(id),
+  decided_by_emp_no TEXT,
+  decided_at TEXT,
+  decision_note TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
 );

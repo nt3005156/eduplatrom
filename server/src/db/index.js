@@ -443,3 +443,6 @@ if (!tableSqlHasCheck('message_outbox', "'fee_notice'")) {
   migrateOutbox();
   console.log('Migrated message_outbox to accept fee notices');
 }
+// Per-row mandatory flag. A mandatory row (a fee notice) skips the opt-out check at send time. Set only by the
+// caller that enqueues it, and only for fee_notice rows (enforced in outbox.enqueue).
+addColumnIfMissing('message_outbox', 'mandatory', 'INTEGER NOT NULL DEFAULT 0');

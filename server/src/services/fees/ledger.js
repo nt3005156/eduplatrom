@@ -363,11 +363,11 @@ export function decideConcession(id, decision, req) {
   if (row.status !== 'requested') throw new FeeError(409, `Concession is already ${row.status}`);
   if (row.requested_by === actorId(req)) throw new FeeError(403, 'The person who requested a concession cannot approve it');
   const tier = concessionTier(row.amount_paisa);
-  // High-value approval follows the permission (fees.approve_concession_high). The system admin is excluded on purpose:
-  // the admin bypasses every permission check, and this one is a second person's decision.
-  const canApproveHigh = userRoleKey(actorId(req)) !== 'system_admin' && hasPermission({ id: actorId(req) }, 'fees.approve_concession_high');
-  if (decision === 'approve' && tier === 'high' && !canApproveHigh) {
-    throw new FeeError(403, `A concession above ${formatNPR(CONCESSION_HIGH_PAISA)} needs the Finance Manager to approve it`);
+  // High-value approval follows the permission fees.approve_concession_high (the Finance Manager). The system admin is the
+  // fallback approver (decided 2026-10-12), and the admin passes the permission check. The maker-checker rule above still applies.
+  const approverRole = userRoleKey(actorId(req));
+  if (decision === 'approve' && tier === 'high' && !hasPermission({ id: actorId(req) }, 'fees.approve_concession_high')) {
+    throw new FeeError(403, `A concession above ${formatNPR(CONCESSION_HIGH_PAISA)} needs the Finance Manager (or the system admin as fallback) to approve it`);
   }
   const applied = [];
   writeTx(() => {
@@ -383,7 +383,9 @@ export function decideConcession(id, decision, req) {
     }
   })();
   logAudit(req, { module: 'fees', action: decision === 'approve' ? 'concession_approved' : 'concession_rejected', description: `Concession ${row.id}`,
-    previousValue: { status: row.status }, newValue: { status: decision === 'approve' ? 'approved' : 'rejected', tier, invoices_updated: applied.length } });
+    previousValue: { status: row.status },
+    newValue: { status: decision === 'approve' ? 'approved' : 'rejected', tier, invoices_updated: applied.length,
+      approver_role: approverRole, fallback_approver: decision === 'approve' && tier === 'high' && approverRole === 'system_admin' } });
   return { id: row.id, status: decision === 'approve' ? 'approved' : 'rejected', invoices_updated: applied };
 }
 
@@ -741,11 +743,14 @@ export function setEmployeeNo(userId, raw, req) {
   return { id: user.id, name: user.name, employee_no: emp };
 }
 
-/** The receipt as printed or shown: receipt number, amount, the people who processed and verified it. */
+/**
+ * The receipt as printed or shown: who paid, the invoice breakdown, this payment's status, and the people who processed
+ * and verified it (staff number and name). Used by the JSON route and the PDF.
+ */
 export function receiptView(receiptNo) {
   const row = db.prepare(`
-    SELECT r.receipt_no, p.id AS payment_id, p.kind, p.amount_paisa, p.method, p.reference, p.created_at,
-      i.invoice_no, s.name AS student_name,
+    SELECT r.receipt_no, p.id AS payment_id, p.invoice_id, p.student_id, p.kind, p.amount_paisa, p.method, p.reference, p.created_at,
+      i.invoice_no, i.period, s.name AS student_name, s.class_level, s.section, s.roll_no,
       p.recorded_by_emp_no, rec.name AS recorded_by_name,
       v.decided_by_emp_no, ver.name AS verified_by_name
     FROM receipts r
@@ -757,17 +762,37 @@ export function receiptView(receiptNo) {
       LEFT JOIN users ver ON ver.id = v.decided_by
     WHERE r.receipt_no = ?`).get(Number(receiptNo));
   if (!row) return null;
+  const inv = invoiceDetail(row.invoice_id);
+  const refunded = -db.prepare('SELECT COALESCE(SUM(amount_paisa), 0) AS s FROM payments WHERE refund_of_id = ?').get(row.payment_id).s;
+  const status = refunded === 0 ? 'Posted' : refunded >= row.amount_paisa ? 'Refunded' : 'Partly refunded';
+  const online = row.method === 'khalti';
   return {
     receipt_no: row.receipt_no,
+    school_name: db.prepare('SELECT school_name FROM settings WHERE id = 1').get()?.school_name || '',
     payment_id: row.payment_id,
     invoice_no: row.invoice_no,
+    period: row.period,
+    student_id: row.student_id,
     student_name: row.student_name,
+    student: { name: row.student_name, class_level: row.class_level, section: row.section, roll_no: row.roll_no },
     amount_paisa: row.amount_paisa,
     method: row.method,
     reference: row.reference,
+    kind: row.kind,
+    status,
+    refunded_paisa: refunded,
     date: row.created_at,
-    processed_by: processedBy(row.recorded_by_emp_no, row.recorded_by_name),
-    verified_by: row.verified_by_name ? processedBy(row.decided_by_emp_no, row.verified_by_name) : null,
+    invoice: {
+      gross_paisa: inv.gross_paisa, concession_paisa: inv.concession_paisa, net_paisa: inv.net_paisa,
+      paid_paisa: inv.paid_paisa, balance_paisa: inv.balance_paisa, credit_balance_paisa: inv.credit_balance_paisa,
+    },
+    items: inv.items.map(it => ({
+      name: db.prepare('SELECT name FROM fee_heads WHERE id = ?').get(it.fee_head_id)?.name || 'Fee',
+      gross_paisa: it.gross_paisa, concession_paisa: it.concession_paisa, net_paisa: it.net_paisa,
+    })),
+    processed_by: online ? 'Online payment (Khalti)' : processedBy(row.recorded_by_emp_no, row.recorded_by_name),
+    verified_by: row.verified_by_name ? processedBy(row.decided_by_emp_no, row.verified_by_name)
+      : (online ? 'Payment gateway (server-side check)' : null),
   };
 }
 

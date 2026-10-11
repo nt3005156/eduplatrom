@@ -24,15 +24,17 @@ process.env.FEES_SUPERVISOR_EMAILS = 'supervisor@school.test';
 delete process.env.FEES_TIER_SUPERVISOR_PAISA; // defaults: NPR 10,000 and NPR 50,000
 delete process.env.FEES_TIER_HEAD_PAISA;
 delete process.env.MESSAGING_EMAIL_PROVIDER;
-// Concession threshold for this file: NPR 300 (30000 paisa). Above it a concession needs the Finance Manager.
-process.env.FEES_CONCESSION_HIGH_PAISA = '30000';
+// Concession threshold for this file: NPR 150 (15000 paisa). Above it a concession needs the Finance Manager.
+// Lower than the default so the amounts in these tests stay inside the invoice that has NPR 300 already paid.
+process.env.FEES_CONCESSION_HIGH_PAISA = '15000';
 
 const { createApp } = await import('../src/app.js');
 const { default: db } = await import('../src/db/index.js');
 const { setKhaltiClientForTest, GatewayError } = await import('../src/services/fees/khalti.js');
 const { runDailyFeeJob, dispatchRows, overpaymentsOn } = await import('../src/services/fees/dailyJob.js');
 const { tierFor } = await import('../src/services/fees/money.js');
-const { creditBalance, processedBy, concessionTier } = await import('../src/services/fees/ledger.js');
+const { creditBalance, processedBy, concessionTier, receiptView } = await import('../src/services/fees/ledger.js');
+const { renderReceiptPdf } = await import('../src/services/fees/receiptPdf.js');
 const { queueOverpaymentEmails } = await import('../src/services/fees/notifications.js');
 const { processOutbox } = await import('../src/services/messaging/outbox.js');
 const { formatNPR } = await import('../src/services/fees/money.js');
@@ -493,10 +495,10 @@ test('concessions: a standard one is approved by the Finance Officer; a high-val
   await login('fmgr');
   const body = (amount, reason) => ({ student_id: ID.sOld, session_id: sessionId, period: 'Term 1', fee_head_id: headTui, amount_paisa: amount, reason });
 
-  assert.equal(concessionTier(30000), 'standard', 'exactly at the threshold is standard');
-  assert.equal(concessionTier(30001), 'high', 'above the threshold is high');
+  assert.equal(concessionTier(15000), 'standard', 'exactly at the threshold is standard');
+  assert.equal(concessionTier(15001), 'high', 'above the threshold is high');
 
-  const std = await call('manager', 'POST', '/api/fees/concessions', body(20000, 'Sibling discount'));
+  const std = await call('manager', 'POST', '/api/fees/concessions', body(10000, 'Sibling discount'));
   assert.equal(std.status, 201, JSON.stringify(std.body));
   assert.equal((await call('clerk', 'POST', `/api/fees/concessions/${std.body.id}/decision`, { decision: 'approve' })).status, 403, 'a clerk cannot approve');
   const stdOk = await call('officer', 'POST', `/api/fees/concessions/${std.body.id}/decision`, { decision: 'approve' });
@@ -511,15 +513,23 @@ test('concessions: a standard one is approved by the Finance Officer; a high-val
   const offHigh = await call('officer', 'POST', `/api/fees/concessions/${high.body.id}/decision`, { decision: 'approve' });
   assert.equal(offHigh.status, 403, 'the Finance Officer cannot approve a high-value concession');
   assert.match(offHigh.body.error, /Finance Manager/);
-  const adminHigh = await call('admin', 'POST', `/api/fees/concessions/${high.body.id}/decision`, { decision: 'approve' });
-  assert.equal(adminHigh.status, 403, 'the system admin cannot approve a high-value concession either');
-  assert.match(adminHigh.body.error, /Finance Manager/);
+  // The system admin is the fallback approver for high-value concessions (decided 2026-10-12), but never their own request.
+  const selfAdmin = await call('admin', 'POST', '/api/fees/concessions', body(40000, 'Admin-requested high-value'));
+  const ownHigh = await call('admin', 'POST', `/api/fees/concessions/${selfAdmin.body.id}/decision`, { decision: 'approve' });
+  assert.equal(ownHigh.status, 403, 'the admin cannot approve the admin\'s own high-value request');
+  assert.match(ownHigh.body.error, /cannot approve it/);
   const rejectOk = await call('officer', 'POST', `/api/fees/concessions/${high.body.id}/decision`, { decision: 'reject' });
   assert.equal(rejectOk.status, 200, 'anyone with the approval permission may reject a high-value request');
   const again = await call('fmgr', 'POST', `/api/fees/concessions/${high.body.id}/decision`, { decision: 'approve' });
   assert.equal(again.status, 409, 'a rejected request cannot be approved later');
 
-  const high2 = await call('manager', 'POST', '/api/fees/concessions', body(40000, 'Part scholarship (second)'));
+  // Fallback: the system admin approves a high-value request from someone else, and the audit entry says so.
+  const hiFb = await call('manager', 'POST', '/api/fees/concessions', body(16000, 'Fallback case'));
+  const fb = await call('admin', 'POST', `/api/fees/concessions/${hiFb.body.id}/decision`, { decision: 'approve' });
+  assert.equal(fb.status, 200, JSON.stringify(fb.body));
+  const fbAudit = db.prepare("SELECT new_value FROM audit_logs WHERE action = 'concession_approved' ORDER BY id DESC LIMIT 1").get();
+  assert.equal(JSON.parse(fbAudit.new_value).fallback_approver, true, 'the audit entry marks the admin fallback');
+  const high2 = await call('manager', 'POST', '/api/fees/concessions', body(16000, 'Part scholarship (second)'));
   const fm = await call('fmgr', 'POST', `/api/fees/concessions/${high2.body.id}/decision`, { decision: 'approve' });
   assert.equal(fm.status, 200, JSON.stringify(fm.body));
   assert.equal(fm.body.status, 'approved');
@@ -564,5 +574,105 @@ test('fee notice queueing: no valid address is recorded as no contact, and a rep
   assert.equal(second.queued, 0);
   const row = db.prepare('SELECT status, recipient FROM message_outbox WHERE dedupe_key = ?').get(`email|none:${ID.gNoMail}|fee_notice|987001`);
   assert.deepEqual({ ...row }, { status: 'skipped_no_contact', recipient: null });
+});
+
+test('mandatory is an explicit per-row flag: an opted-out fee notice without it is blocked, and only fee notices may be mandatory', async () => {
+  const { enqueue } = await import('../src/services/messaging/outbox.js');
+  const base = { channel: 'email', recipient: 'gover@ctl.test', template_id: 'fees.overpayment.v1', subject: 's', body: 'b',
+    user_id: ID.gOver, student_id: ID.sOver, event_kind: 'fee_notice' };
+  enqueue({ ...base, dedupe_key: 'ctl-flag-off', mandatory: false });
+  enqueue({ ...base, dedupe_key: 'ctl-flag-on', mandatory: true });
+  assert.throws(() => enqueue({ ...base, event_kind: 'notice', dedupe_key: 'ctl-flag-bad', mandatory: true }),
+    /only fee_notice messages can be mandatory/);
+  await processOutbox({ limit: 500 });
+  assert.equal(db.prepare("SELECT status FROM message_outbox WHERE dedupe_key = 'ctl-flag-off'").get().status, 'skipped_optout');
+  assert.equal(db.prepare("SELECT status FROM message_outbox WHERE dedupe_key = 'ctl-flag-on'").get().status, 'simulated');
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM message_outbox WHERE dedupe_key = 'ctl-flag-bad'").get().n, 0);
+});
+
+// ---------- receipt PDF ----------
+
+// pdfkit writes each text run as hex glyph codes inside [...] TJ. Decode them so the test can read the words.
+function pdfText(buf) {
+  const src = buf.toString('latin1');
+  const runs = [];
+  for (const m of src.matchAll(/\[((?:<[0-9a-fA-F]*>|-?[\d.]+|\s)*)\]\s*TJ/g)) {
+    runs.push([...m[1].matchAll(/<([0-9a-fA-F]*)>/g)].map(h => Buffer.from(h[1], 'hex').toString('latin1')).join(''));
+  }
+  return runs.join('\n');
+}
+
+test('receipt PDF: staff download it; the linked guardian can; another guardian and the student cannot', async () => {
+  const mine = db.prepare(`SELECT r.receipt_no FROM receipts r JOIN payments p ON p.id = r.payment_id
+    WHERE p.recorded_by_emp_no = 'CSH-002' AND p.student_id = ? ORDER BY r.receipt_no LIMIT 1`).get(ID.sOld);
+  assert.ok(mine, 'a cash receipt recorded by CSH-002 exists');
+  const get = (who, url) => fetch(base + url, { headers: { Authorization: `Bearer ${T[who]}` } });
+
+  const staff = await get('admin', `/api/fees/receipts/${mine.receipt_no}/pdf`);
+  assert.equal(staff.status, 200);
+  assert.match(staff.headers.get('content-type'), /application\/pdf/);
+  assert.match(staff.headers.get('content-disposition'), new RegExp(`receipt-${mine.receipt_no}\\.pdf`));
+  const bytes = Buffer.from(await staff.arrayBuffer());
+  assert.equal(bytes.subarray(0, 5).toString('latin1'), '%PDF-');
+
+  const text = pdfText(await renderReceiptPdf(receiptView(mine.receipt_no), { compress: false }));
+  for (const want of ['Fee receipt', 'Invoice breakdown', 'Balance due', 'CSH-002 / clerk', 'FIN-014 / officer', 'This payment']) {
+    assert.ok(text.includes(want), `the receipt shows "${want}"`);
+  }
+
+  addUser('gOther', { role: 'guardian', roleKey: 'guardian' });
+  await login('gOther');
+  const child = db.prepare(`SELECT r.receipt_no FROM receipts r JOIN payments p ON p.id = r.payment_id
+    WHERE p.student_id = ? ORDER BY r.receipt_no LIMIT 1`).get(ID.sOver);
+  assert.ok(child, 'the child has a receipt');
+  assert.equal((await get('gOver', `/api/guardian/fees/receipts/${child.receipt_no}/pdf`)).status, 200, 'the linked guardian can download');
+  assert.equal((await get('gOther', `/api/guardian/fees/receipts/${child.receipt_no}/pdf`)).status, 404, 'an unlinked guardian gets 404');
+  assert.equal((await get('sOver', `/api/guardian/fees/receipts/${child.receipt_no}/pdf`)).status, 403, 'a student cannot use the guardian route');
+  assert.equal((await get('gOver', `/api/fees/receipts/${child.receipt_no}/pdf`)).status, 403, 'a guardian cannot use the staff route');
+  assert.equal((await get('admin', '/api/fees/receipts/999999/pdf')).status, 404);
+});
+
+// ---------- daily fee audit sign-off ----------
+
+test('daily fee audit: the job creates the sign-off; the Finance Manager signs off; open items need a note; a returned day can be signed later', async () => {
+  const run = await runDailyFeeJob({ now: new Date('2027-01-15T06:00:00Z'), force: true });
+  assert.equal(run.ran, true);
+  const so = db.prepare("SELECT * FROM fee_daily_signoffs WHERE reconciled_date = '2027-01-14'").get();
+  assert.ok(so, 'a sign-off row exists for the reconciled day');
+  assert.equal(so.status, 'pending');
+
+  const list = await call('officer', 'GET', '/api/fees/signoffs?status=pending');
+  assert.equal(list.status, 200, 'the Finance Officer can see the sign-off list');
+  assert.ok(list.body.signoffs.some(x => x.id === so.id));
+  assert.equal((await call('officer', 'POST', `/api/fees/signoffs/${so.id}/decision`, { decision: 'sign_off' })).status, 403,
+    'the Finance Officer cannot sign off the daily audit');
+  assert.equal((await call('clerk', 'POST', `/api/fees/signoffs/${so.id}/decision`, { decision: 'sign_off' })).status, 403);
+
+  const outstanding = so.open_exceptions > 0 || so.pending_verifications > 0;
+  const first = await call('fmgr', 'POST', `/api/fees/signoffs/${so.id}/decision`, { decision: 'sign_off' });
+  if (outstanding) {
+    assert.equal(first.status, 400, 'open items need a note before sign-off');
+    assert.match(first.body.error, /open exception|unverified payment/);
+  } else {
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+  }
+  const signed = outstanding
+    ? await call('fmgr', 'POST', `/api/fees/signoffs/${so.id}/decision`, { decision: 'sign_off', note: 'Reviewed the open items with the bursar' })
+    : first;
+  assert.equal(signed.status, 200, JSON.stringify(signed.body));
+  assert.equal(signed.body.status, 'signed_off');
+  assert.equal((await call('fmgr', 'POST', `/api/fees/signoffs/${so.id}/decision`, { decision: 'sign_off', note: 'again' })).status, 409,
+    'a signed-off day cannot change');
+
+  await runDailyFeeJob({ now: new Date('2027-01-16T06:00:00Z'), force: true });
+  const next = db.prepare("SELECT * FROM fee_daily_signoffs WHERE reconciled_date = '2027-01-15'").get();
+  assert.equal((await call('fmgr', 'POST', `/api/fees/signoffs/${next.id}/decision`, { decision: 'return' })).status, 400,
+    'returning a day needs a note');
+  const ret = await call('fmgr', 'POST', `/api/fees/signoffs/${next.id}/decision`, { decision: 'return', note: 'Missing bank slip for one deposit' });
+  assert.equal(ret.status, 200);
+  assert.equal(ret.body.status, 'returned');
+  const later = await call('fmgr', 'POST', `/api/fees/signoffs/${next.id}/decision`, { decision: 'sign_off', note: 'Slip received and matched' });
+  assert.equal(later.status, 200, 'a returned day can be signed off later');
+  assert.equal(later.body.status, 'signed_off');
 });
 

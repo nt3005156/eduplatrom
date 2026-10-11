@@ -1,12 +1,11 @@
 // Fee notifications through the Phase 2 outbox. Called inside the payment transaction, so the payment and its
 // notification are written together or not at all.
-// Overpayment email is a mandatory fee notice: opt-outs do not block it (see MANDATORY_EVENT_KINDS in outbox.js).
+// Overpayment email is a mandatory fee notice (mandatory = 1): opt-outs do not block it.
 // It still obeys the pause switch, the channel switch, and the monthly quota.
 import db from '../../db/index.js';
 import { enqueue, normalizeRecipient } from '../messaging/outbox.js';
+import { TEMPLATE_IDS } from '../messaging/templates.js';
 import { overpaymentNotice } from './notices.js';
-
-export const FEE_TEMPLATE_IDS = { overpayment: 'fees.overpayment.v1' };
 
 /**
  * Queues the overpayment email to each guardian who may view the student's fees.
@@ -25,9 +24,9 @@ export function queueOverpaymentEmails({ noticeId, studentId, amount_paisa }) {
     const msg = overpaymentNotice({ parentName: g.name, amount_paisa });
     const res = enqueue({
       channel: 'email', recipient: addr.ok ? addr.value : null, user_id: g.guardian_id, student_id: Number(studentId),
-      template_id: FEE_TEMPLATE_IDS.overpayment, subject: msg.subject, body: msg.body,
+      template_id: TEMPLATE_IDS.overpayment, subject: msg.subject, body: msg.body,
       dedupe_key: `email|${addr.ok ? addr.value : `none:${g.guardian_id}`}|fee_notice|${Number(noticeId)}`,
-      event_kind: 'fee_notice', contact_missing: !addr.ok,
+      event_kind: 'fee_notice', mandatory: true, contact_missing: !addr.ok,
     });
     if (!res.inserted) summary.duplicate++;
     else if (!addr.ok) summary.skipped_no_contact++;
