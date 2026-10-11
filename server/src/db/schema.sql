@@ -927,20 +927,23 @@ CREATE TABLE IF NOT EXISTS gateway_transactions (
   updated_at TEXT DEFAULT (datetime('now'))
 );
 
--- Phase 3 controls: bank deposits need verification by a second person before they are posted.
-CREATE TABLE IF NOT EXISTS bank_deposits (
+-- Phase 3 controls: cash and bank payments wait in this queue until a second person counts or verifies them.
+CREATE TABLE IF NOT EXISTS payment_verifications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  method TEXT NOT NULL CHECK(method IN ('cash','bank')),
   invoice_id INTEGER NOT NULL REFERENCES invoices(id),
   student_id INTEGER NOT NULL REFERENCES users(id),
   amount_paisa INTEGER NOT NULL CHECK(amount_paisa > 0),
-  reference TEXT NOT NULL UNIQUE,
+  -- Bank: the deposit slip or transaction number, unique. Cash: none (the draft number is the id).
+  reference TEXT UNIQUE,
   status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','posted','rejected')),
-  recorded_by INTEGER,
-  decided_by INTEGER,
+  recorded_by INTEGER NOT NULL,          -- the counter staff member who received the money
+  decided_by INTEGER,                    -- the second person who counted or verified it
   decided_at TEXT,
   decision_note TEXT,
   payment_id INTEGER UNIQUE REFERENCES payments(id),
-  created_at TEXT DEFAULT (datetime('now'))
+  created_at TEXT DEFAULT (datetime('now')),
+  CHECK (method = 'cash' OR reference IS NOT NULL)
 );
 
 -- Overpayments and refunds. A credit is positive. An application to an invoice and a refund are negative.
@@ -983,6 +986,7 @@ CREATE TABLE IF NOT EXISTS reconciliation_exceptions (
   first_seen_date TEXT NOT NULL,
   last_seen_date TEXT NOT NULL,
   escalated_at TEXT,
+  escalation_level TEXT CHECK(escalation_level IN ('supervisor','head_of_finance')),
   resolved_by INTEGER,
   resolved_at TEXT,
   resolution_note TEXT
@@ -992,7 +996,7 @@ CREATE TABLE IF NOT EXISTS reconciliation_exceptions (
 CREATE TABLE IF NOT EXISTS fee_dispatches (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   run_date TEXT NOT NULL,
-  audience TEXT NOT NULL CHECK(audience IN ('finance','ops','head_of_finance')),
+  audience TEXT NOT NULL CHECK(audience IN ('finance','ops','supervisor','head_of_finance')),
   recipient TEXT,
   subject TEXT NOT NULL,
   body TEXT NOT NULL,

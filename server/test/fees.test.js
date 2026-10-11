@@ -74,14 +74,16 @@ async function call(who, method, url, body) {
   return { status: r.status, body: json };
 }
 
-async function bankPay(invoiceId, amount, reference) {
-  const sub = await call('clerk', 'POST', '/api/fees/payments', { invoice_id: invoiceId, amount_paisa: amount, method: 'bank', reference });
+// Cash and bank money are recorded by the clerk, then finalized by a second person (admin here).
+async function offlinePay(invoiceId, amount, method, reference) {
+  const sub = await call('clerk', 'POST', '/api/fees/payments', { invoice_id: invoiceId, amount_paisa: amount, method, reference });
   assert.equal(sub.status, 201, JSON.stringify(sub.body));
   assert.equal(sub.body.status, 'pending_verification');
-  const dec = await call('admin', 'POST', `/api/fees/deposits/${sub.body.deposit_id}/decision`, { decision: 'approve' });
+  const dec = await call('admin', 'POST', `/api/fees/verifications/${sub.body.verification_id}/decision`, { decision: 'approve' });
   assert.equal(dec.status, 200, JSON.stringify(dec.body));
   return { payment_id: dec.body.payment_id, receipt_no: dec.body.receipt_no };
 }
+const bankPay = (invoiceId, amount, reference) => offlinePay(invoiceId, amount, 'bank', reference);
 
 let sessionId, headTui, headExm, invKid, invKid2, invOther;
 
@@ -320,12 +322,25 @@ test('cash and bank payments validate amounts and require a reference for bank d
   assert.equal(over.status, 409);
 });
 
-test('a cash payment writes the payment and its receipt together', async () => {
-  const r = await call('clerk', 'POST', '/api/fees/payments', { invoice_id: invKid2, amount_paisa: 100000, method: 'cash' });
-  assert.equal(r.status, 201, JSON.stringify(r.body));
-  assert.ok(r.body.receipt_no >= 1);
-  const row = db.prepare('SELECT r.receipt_no FROM receipts r WHERE r.payment_id = ?').get(r.body.payment_id);
-  assert.equal(row.receipt_no, r.body.receipt_no);
+test('a cash payment gets a draft number at once, and a receipt only when a second person finalizes it', async () => {
+  const sub = await call('clerk', 'POST', '/api/fees/payments', { invoice_id: invKid2, amount_paisa: 100000, method: 'cash' });
+  assert.equal(sub.status, 201, JSON.stringify(sub.body));
+  assert.equal(sub.body.status, 'pending_verification');
+  assert.equal(sub.body.draft_receipt, `DRAFT-${sub.body.verification_id}`);
+  assert.equal(sub.body.receipt_no, undefined, 'no receipt number before it is finalized');
+  const before = db.prepare('SELECT COUNT(*) AS n FROM payments WHERE invoice_id = ? AND method = ?').get(invKid2, 'cash').n;
+
+  const self = await call('clerk', 'POST', `/api/fees/verifications/${sub.body.verification_id}/decision`, { decision: 'approve' });
+  assert.equal(self.status, 403, 'the clerk who counted the cash cannot finalize it');
+  const dec = await call('admin', 'POST', `/api/fees/verifications/${sub.body.verification_id}/decision`, { decision: 'approve' });
+  assert.equal(dec.status, 200, JSON.stringify(dec.body));
+  assert.ok(dec.body.receipt_no >= 1);
+  const row = db.prepare('SELECT r.receipt_no FROM receipts r WHERE r.payment_id = ?').get(dec.body.payment_id);
+  assert.equal(row.receipt_no, dec.body.receipt_no);
+  const v = db.prepare('SELECT recorded_by, decided_by FROM payment_verifications WHERE id = ?').get(sub.body.verification_id);
+  assert.ok(v.recorded_by && v.decided_by && v.recorded_by !== v.decided_by, 'counter and verifier are different users');
+  const after = db.prepare('SELECT COUNT(*) AS n FROM payments WHERE invoice_id = ? AND method = ?').get(invKid2, 'cash').n;
+  assert.equal(after, before + 1, 'exactly one payment was posted');
 });
 
 // ---------- append-only ledger ----------
@@ -421,9 +436,15 @@ test('receipt numbers have no gaps under concurrent payments', async () => {
   const inv = invKid2;
   const bal = (await call('admin', 'GET', `/api/fees/invoices/${inv}`)).body.balance_paisa;
   assert.ok(bal > 1200, 'kid2 still has a balance to take 12 small payments');
-  // Several payments on one invoice, sent at once.
-  const results = await Promise.all(Array.from({ length: 12 }, () => call('clerk', 'POST', '/api/fees/payments', { invoice_id: inv, amount_paisa: 100, method: 'cash' })));
-  const ok = results.filter(r => r.status === 201);
+  // Twelve cash payments are recorded, then finalized all at once by a second person.
+  const subs = [];
+  for (let i = 0; i < 12; i++) {
+    const r = await call('clerk', 'POST', '/api/fees/payments', { invoice_id: inv, amount_paisa: 100, method: 'cash' });
+    assert.equal(r.status, 201);
+    subs.push(r.body.verification_id);
+  }
+  const results = await Promise.all(subs.map(id => call('admin', 'POST', `/api/fees/verifications/${id}/decision`, { decision: 'approve' })));
+  const ok = results.filter(r => r.status === 200);
   assert.equal(ok.length, 12, JSON.stringify(results.map(r => r.status)));
   const nums = db.prepare('SELECT receipt_no FROM receipts ORDER BY receipt_no').all().map(r => r.receipt_no);
   assert.deepEqual(nums, Array.from({ length: nums.length }, (_, i) => i + 1), 'receipt numbers run 1..N with no gaps or duplicates');

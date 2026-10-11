@@ -120,13 +120,13 @@ feesRouter.get('/khalti/return', wrap(async (req, res) => {
   res.set('Cache-Control', 'no-store').json({ outcome: result.outcome, payment_id: result.payment_id, receipt_no: result.receipt_no, credit_added_paisa: result.credit_added_paisa });
 }));
 
-// Bank deposits: recorded by one person, verified by another (fees.verify_deposit).
-feesRouter.get('/deposits', requireAuth, requirePermission('fees.view'), wrap((req, res) => {
-  res.json({ deposits: ledger.listDeposits(req.query) });
+// Cash and bank payments waiting for a second person (fees.verify_payment). The recorder cannot verify their own.
+feesRouter.get('/verifications', requireAuth, requirePermission('fees.view'), wrap((req, res) => {
+  res.json({ verifications: ledger.listVerifications(req.query) });
 }));
 
-feesRouter.post('/deposits/:id/decision', requireAuth, requirePermission('fees.verify_deposit'), wrap((req, res) => {
-  res.json(ledger.decideBankDeposit(idParam(req), req.body || {}, req));
+feesRouter.post('/verifications/:id/decision', requireAuth, requirePermission('fees.verify_payment'), wrap((req, res) => {
+  res.json(ledger.decideVerification(idParam(req), req.body || {}, req));
 }));
 
 // Credit (overpayments held on the account).

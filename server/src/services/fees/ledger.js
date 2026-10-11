@@ -371,7 +371,7 @@ export function balanceOf(invoiceId) {
 
 const insCredit = db.prepare(`INSERT INTO credit_ledger (student_id, kind, amount_paisa, invoice_id, source_payment_id, reference, reason, recorded_by)
   VALUES (?,?,?,?,?,?,?,?)`);
-const insDeposit = db.prepare('INSERT INTO bank_deposits (invoice_id, student_id, amount_paisa, reference, recorded_by) VALUES (?,?,?,?,?)');
+const insVerification = db.prepare('INSERT INTO payment_verifications (method, invoice_id, student_id, amount_paisa, reference, recorded_by) VALUES (?,?,?,?,?,?)');
 
 export function creditBalance(studentId) {
   return db.prepare('SELECT COALESCE(SUM(amount_paisa), 0) AS s FROM credit_ledger WHERE student_id = ?').get(Number(studentId)).s;
@@ -408,76 +408,78 @@ export function applyCreditToInvoice(invoiceId, req) {
   })();
 }
 
-/** Cash is posted at once. Bank deposits wait in the verification queue (see decideBankDeposit). */
+/**
+ * Cash and bank money are both recorded first and posted only after a second person verifies them.
+ * The counter staff member records it and gets a draft number (DRAFT-n). The second person counts the cash, or checks
+ * the bank slip, and approves. Approval posts the payment and issues the gap-free receipt number.
+ */
 export function recordOfflinePayment(input, req) {
   if (!OFFLINE_METHODS.includes(input.method)) throw new FeeError(400, 'method must be cash or bank');
   assertPaisa(input.amount_paisa);
-  if (input.method === 'bank') return submitBankDeposit(input, req);
-  const reference = input.reference ? cleanText(input.reference, { field: 'reference', max: 100, required: false }) : null;
+  const reference = input.method === 'bank'
+    ? cleanText(input.reference, { field: 'reference (deposit slip or transaction number)', max: 100 })
+    : (input.reference ? cleanText(input.reference, { field: 'reference', max: 100, required: false }) : null);
   return writeTx(() => {
     const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(Number(input.invoice_id));
     if (!inv) throw new FeeError(404, 'Invoice not found');
     const balance = inv.net_paisa - paidTotal(inv.id);
     if (balance <= 0) throw new FeeError(409, 'Invoice has no balance to pay');
     if (input.amount_paisa > balance) throw new FeeError(409, `Amount is more than the balance of ${balance} paisa`);
-    const written = postPayment(inv, { amount: input.amount_paisa, method: 'cash', reference, recordedBy: actorId(req) });
-    logAudit(req, { module: 'fees', action: 'payment_recorded', description: `cash payment on ${inv.invoice_no}`,
-      newValue: { payment_id: written.payment_id, receipt_no: written.receipt_no, amount_paisa: input.amount_paisa, method: 'cash' } });
-    return { ...written, status: 'posted', balance_after_paisa: balance - input.amount_paisa, invoice_no: inv.invoice_no };
+    let r;
+    try {
+      r = insVerification.run(input.method, inv.id, inv.student_id, input.amount_paisa, reference, actorId(req));
+    } catch (err) {
+      if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') throw new FeeError(409, 'This deposit reference was already recorded');
+      throw err;
+    }
+    const id = Number(r.lastInsertRowid);
+    logAudit(req, { module: 'fees', action: 'payment_submitted', description: `${input.method} payment on ${inv.invoice_no} waiting for a second person`,
+      newValue: { verification_id: id, method: input.method, amount_paisa: input.amount_paisa } });
+    return { verification_id: id, status: 'pending_verification', method: input.method, draft_receipt: `DRAFT-${id}`, invoice_no: inv.invoice_no };
   })();
 }
 
-function submitBankDeposit(input, req) {
-  const reference = cleanText(input.reference, { field: 'reference (deposit slip or transaction number)', max: 100 });
-  const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(Number(input.invoice_id));
-  if (!inv) throw new FeeError(404, 'Invoice not found');
-  const balance = inv.net_paisa - paidTotal(inv.id);
-  if (balance <= 0) throw new FeeError(409, 'Invoice has no balance to pay');
-  if (input.amount_paisa > balance) throw new FeeError(409, `Amount is more than the balance of ${balance} paisa`);
-  let r;
-  try {
-    r = insDeposit.run(inv.id, inv.student_id, input.amount_paisa, reference, actorId(req));
-  } catch (err) {
-    if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') throw new FeeError(409, 'This deposit reference was already recorded');
-    throw err;
-  }
-  logAudit(req, { module: 'fees', action: 'bank_deposit_submitted', description: `Bank deposit on ${inv.invoice_no} waiting for verification`,
-    newValue: { deposit_id: Number(r.lastInsertRowid), amount_paisa: input.amount_paisa } });
-  return { deposit_id: Number(r.lastInsertRowid), status: 'pending_verification', invoice_no: inv.invoice_no };
-}
-
-export function listDeposits({ status } = {}) {
+export function listVerifications({ status, method } = {}) {
+  const where = [];
+  const args = [];
+  if (status) { where.push('d.status = ?'); args.push(status); }
+  if (method) { where.push('d.method = ?'); args.push(method); }
   return db.prepare(`
-    SELECT d.*, u.name AS student_name, i.invoice_no FROM bank_deposits d
+    SELECT d.*, u.name AS student_name, i.invoice_no, rec.name AS recorded_by_name, dec.name AS decided_by_name
+    FROM payment_verifications d
     JOIN users u ON u.id = d.student_id JOIN invoices i ON i.id = d.invoice_id
-    ${status ? 'WHERE d.status = ?' : ''} ORDER BY d.id DESC`).all(...(status ? [status] : []));
+    LEFT JOIN users rec ON rec.id = d.recorded_by LEFT JOIN users dec ON dec.id = d.decided_by
+    ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY d.id DESC`).all(...args);
 }
 
 /**
- * A second person verifies a bank deposit. The person who recorded it cannot verify it.
- * Approval posts the payment and its receipt. Rejection posts nothing.
+ * A second person finalizes a cash receipt or verifies a bank deposit. The person who recorded it cannot.
+ * Approval posts the payment and issues the receipt number. Rejection posts nothing.
+ * Both names are kept on the verification row (recorded_by and decided_by), which is the trail for the receipt.
  */
-export function decideBankDeposit(id, input, req) {
+export function decideVerification(id, input, req) {
   if (!['approve', 'reject'].includes(input.decision)) throw new FeeError(400, 'decision must be approve or reject');
   const note = input.note ? cleanText(input.note, { field: 'note', max: 300, required: false }) : null;
   return writeTx(() => {
-    const d = db.prepare('SELECT * FROM bank_deposits WHERE id = ?').get(Number(id));
-    if (!d) throw new FeeError(404, 'Deposit not found');
-    if (d.status !== 'pending') throw new FeeError(409, `Deposit is already ${d.status}`);
-    if (d.recorded_by === actorId(req)) throw new FeeError(403, 'The person who recorded a deposit cannot verify it');
+    const d = db.prepare('SELECT * FROM payment_verifications WHERE id = ?').get(Number(id));
+    if (!d) throw new FeeError(404, 'Payment not found in the verification queue');
+    if (d.status !== 'pending') throw new FeeError(409, `Payment is already ${d.status}`);
+    if (d.recorded_by === actorId(req)) throw new FeeError(403, 'The person who recorded a payment cannot verify it');
     if (input.decision === 'reject') {
-      db.prepare("UPDATE bank_deposits SET status = 'rejected', decided_by = ?, decided_at = datetime('now'), decision_note = ? WHERE id = ?")
+      db.prepare("UPDATE payment_verifications SET status = 'rejected', decided_by = ?, decided_at = datetime('now'), decision_note = ? WHERE id = ?")
         .run(actorId(req), note, d.id);
-      logAudit(req, { module: 'fees', action: 'bank_deposit_rejected', description: `Deposit ${d.id} rejected`, newValue: { deposit_id: d.id, note } });
+      logAudit(req, { module: 'fees', action: 'payment_rejected', description: `${d.method} payment ${d.id} rejected`, newValue: { verification_id: d.id, note } });
       return { id: d.id, status: 'rejected' };
     }
     const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(d.invoice_id);
-    const written = postPayment(inv, { amount: d.amount_paisa, method: 'bank', reference: d.reference, recordedBy: d.recorded_by });
-    db.prepare(`UPDATE bank_deposits SET status = 'posted', decided_by = ?, decided_at = datetime('now'), decision_note = ?, payment_id = ? WHERE id = ?`)
+    const written = postPayment(inv, { amount: d.amount_paisa, method: d.method, reference: d.reference, recordedBy: d.recorded_by });
+    db.prepare(`UPDATE payment_verifications SET status = 'posted', decided_by = ?, decided_at = datetime('now'), decision_note = ?, payment_id = ? WHERE id = ?`)
       .run(actorId(req), note, written.payment_id, d.id);
-    logAudit(req, { module: 'fees', action: 'bank_deposit_posted', description: `Deposit ${d.id} posted on ${inv.invoice_no}`,
-      newValue: { deposit_id: d.id, payment_id: written.payment_id, receipt_no: written.receipt_no, amount_paisa: d.amount_paisa, credit_added_paisa: written.credit_added_paisa } });
-    return { id: d.id, status: 'posted', payment_id: written.payment_id, receipt_no: written.receipt_no, credit_added_paisa: written.credit_added_paisa };
+    logAudit(req, { module: 'fees', action: 'payment_verified', description: `${d.method} payment ${d.id} verified and posted on ${inv.invoice_no}`,
+      newValue: { verification_id: d.id, payment_id: written.payment_id, receipt_no: written.receipt_no, amount_paisa: d.amount_paisa,
+        recorded_by: d.recorded_by, verified_by: actorId(req), credit_added_paisa: written.credit_added_paisa } });
+    return { id: d.id, status: 'posted', payment_id: written.payment_id, receipt_no: written.receipt_no, credit_added_paisa: written.credit_added_paisa,
+      recorded_by: d.recorded_by, verified_by: actorId(req) };
   })();
 }
 
