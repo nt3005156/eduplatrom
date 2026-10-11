@@ -1097,6 +1097,8 @@ CREATE TABLE IF NOT EXISTS exams (
   status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','published')),
   published_at TEXT,
   published_by INTEGER REFERENCES users(id),
+  -- Increments on every publish. Report cards carry it, so a corrected version is identifiable.
+  publish_version INTEGER NOT NULL DEFAULT 0,
   created_by INTEGER REFERENCES users(id),
   created_at TEXT DEFAULT (datetime('now')),
   UNIQUE(term_id, class_level, section, subject_id)
@@ -1125,4 +1127,21 @@ CREATE TABLE IF NOT EXISTS exam_marks (
   UNIQUE(exam_id, student_id)
 );
 CREATE INDEX IF NOT EXISTS idx_exam_marks_student ON exam_marks(student_id);
+
+-- A correction to published results. Requested by a teacher or admin, decided by someone else.
+-- Approval unpublishes the exam. Only one request may be pending per exam.
+CREATE TABLE IF NOT EXISTS exam_unpublish_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  exam_id INTEGER NOT NULL REFERENCES exams(id) ON DELETE CASCADE,
+  reason TEXT NOT NULL,
+  requested_by INTEGER NOT NULL REFERENCES users(id),
+  requested_by_emp_no TEXT,
+  requested_at TEXT DEFAULT (datetime('now')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),
+  decided_by INTEGER REFERENCES users(id),
+  decided_by_emp_no TEXT,
+  decided_at TEXT,
+  decision_note TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_unpublish_one_pending ON exam_unpublish_requests(exam_id) WHERE status = 'pending';
 

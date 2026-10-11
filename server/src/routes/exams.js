@@ -5,13 +5,21 @@
 // Business rules live in services/exams/exams.js and services/exams/grading.js.
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
-import { requirePermission } from '../services/permissions.js';
+import { requirePermission, hasPermission } from '../services/permissions.js';
 import { accessibleLink } from '../services/guardians.js';
 import * as exams from '../services/exams/exams.js';
 import { ExamError } from '../services/exams/exams.js';
 
 export const examsRouter = Router();
 export const examsPortalRouter = Router();
+
+// Passes if the user holds any one of the listed permissions.
+function requireAnyPermission(...keys) {
+  return (req, res, next) => {
+    if (keys.some(k => hasPermission(req.user, k))) return next();
+    return res.status(403).json({ error: `Missing permission: one of ${keys.join(', ')}` });
+  };
+}
 
 const wrap = fn => async (req, res, next) => {
   try {
@@ -49,6 +57,11 @@ examsRouter.post('/', requireAuth, requirePermission('exams.manage'), wrap((req,
   res.status(201).json({ exam: exams.createExam(req, req.body) });
 }));
 
+// Queue of correction requests. Declared before '/:id' so 'unpublish-requests' is not read as an exam id.
+examsRouter.get('/unpublish-requests', requireAuth, requirePermission('exams.publish'), wrap((req, res) => {
+  res.json({ requests: exams.listUnpublishRequests({ status: req.query.status }) });
+}));
+
 examsRouter.get('/:id', requireAuth, requirePermission('exams.view'), wrap((req, res) => {
   res.json(exams.getExam(req, Number(req.params.id)));
 }));
@@ -62,9 +75,15 @@ examsRouter.post('/:id/publish', requireAuth, requirePermission('exams.publish')
   res.json({ exam: exams.publishExam(req, Number(req.params.id)) });
 }));
 
-// Body: { reason } (3 to 500 characters). Needed to correct published marks.
-examsRouter.post('/:id/unpublish', requireAuth, requirePermission('exams.publish'), wrap((req, res) => {
-  res.json({ exam: exams.unpublishExam(req, Number(req.params.id), req.body) });
+// ---------- corrections to published results ----------
+// Teacher (in scope) or admin asks for a correction. Body: { reason } (3 to 500 characters).
+examsRouter.post('/:id/unpublish-requests', requireAuth, requireAnyPermission('exams.enter_marks', 'exams.publish'), wrap((req, res) => {
+  res.status(201).json({ request: exams.requestUnpublish(req, Number(req.params.id), req.body) });
+}));
+
+// Someone other than the requester approves (unpublishes) or rejects. Body: { decision: 'approve'|'reject', note? }
+examsRouter.post('/unpublish-requests/:rid/decision', requireAuth, requirePermission('exams.publish'), wrap((req, res) => {
+  res.json({ request: exams.decideUnpublishRequest(req, Number(req.params.rid), req.body) });
 }));
 
 // ---------- guardian portal ----------

@@ -11,6 +11,8 @@ import db from '../../db/index.js';
 import { logAudit } from '../../utils/audit.js';
 import { resolveScope, isWithinScope } from '../scope.js';
 import { isIsoDate } from '../../utils/validate.js';
+import { notifyUser } from '../../utils/notify.js';
+import { hasPermission } from '../permissions.js';
 import { validateBands, validateExamMarks, validateComponentMins, computeResult, summarizeResults, GradingError } from './grading.js';
 
 export class ExamError extends Error {
@@ -237,6 +239,16 @@ export function enterMarks(req, id, body) {
 
 // ---------- publish ----------
 
+/** Staff who must hear about a re-publish after a correction: academic head, exam coordinators, and the class teacher. */
+function correctionRecipients(exam) {
+  const heads = db.prepare(`SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id
+    WHERE r.key IN ('academic_head', 'exam_coordinator') AND u.account_status = 'active'`).all().map(r => r.id);
+  const classTeachers = db.prepare(`SELECT DISTINCT teacher_id AS id FROM teacher_assignments
+    WHERE is_class_teacher = 1 AND class_level = ? AND (? IS NULL OR section IS NULL OR section = ?)`)
+    .all(exam.class_level, exam.section, exam.section).map(r => r.id);
+  return [...new Set([...heads, ...classTeachers])];
+}
+
 export function publishExam(req, id) {
   const exam = getExamRow(id);
   if (!exam) throw new ExamError(404, 'Exam not found');
@@ -249,21 +261,94 @@ export function publishExam(req, id) {
     const names = missing.slice(0, 5).map(s => s.name).join(', ');
     throw new ExamError(409, `${missing.length} student(s) have no mark or absent flag yet: ${names}${missing.length > 5 ? ', and others' : ''}`);
   }
-  db.prepare(`UPDATE exams SET status = 'published', published_at = datetime('now'), published_by = ? WHERE id = ?`).run(req.user.id, id);
-  logAudit(req, { module: 'exams', action: 'published', description: `Published exam #${id} (${exam.subject_name}, class ${exam.class_level}${exam.section ? ` ${exam.section}` : ''})`,
-    previousValue: { status: 'draft' }, newValue: { status: 'published', students: roster.length } });
+  const version = exam.publish_version + 1;
+  db.prepare(`UPDATE exams SET status = 'published', published_at = datetime('now'), published_by = ?, publish_version = ? WHERE id = ?`)
+    .run(req.user.id, version, id);
+  const where = `${exam.subject_name}, class ${exam.class_level}${exam.section ? ` ${exam.section}` : ''}, ${exam.term_name}`;
+  logAudit(req, { module: 'exams', action: 'published', description: `Published exam #${id} (${where}), version ${version}`,
+    previousValue: { status: 'draft', publish_version: exam.publish_version }, newValue: { status: 'published', students: roster.length, publish_version: version } });
+
+  // A re-publish after a correction is a change the school must see. Notify the people who oversee the class.
+  if (exam.publish_version > 0) {
+    for (const userId of correctionRecipients(exam)) {
+      notifyUser({ user_id: userId, type: 'grade', title: `Results re-published: ${exam.subject_name}`,
+        body: `${where}. Version ${version}, after a correction. Guardians with access see the updated marks.`, related_id: id });
+    }
+    logAudit(req, { module: 'exams', action: 'republished', description: `Re-published exam #${id} after a correction (version ${version})`,
+      newValue: { exam_id: id, publish_version: version } });
+  }
   return getExamRow(id);
 }
 
-export function unpublishExam(req, id, body) {
+// ---------- unpublish: request, then a second person approves ----------
+// The teacher (or admin) who needs a correction submits a request with a reason. Someone else with
+// exams.publish approves it, and approval is what unpublishes the exam. Nobody approves their own request.
+
+const REQUEST_SELECT = `SELECT r.id, r.exam_id, r.reason, r.status, r.requested_by, r.requested_at, r.decided_by, r.decided_at, r.decision_note,
+  u.name AS requested_by_name, d.name AS decided_by_name, e.class_level, e.section, sub.name AS subject_name, t.name AS term_name
+  FROM exam_unpublish_requests r
+  JOIN exams e ON e.id = r.exam_id
+  JOIN subjects sub ON sub.id = e.subject_id
+  JOIN exam_terms t ON t.id = e.term_id
+  JOIN users u ON u.id = r.requested_by
+  LEFT JOIN users d ON d.id = r.decided_by`;
+
+export function requestUnpublish(req, id, body) {
   const exam = getExamRow(id);
   if (!exam) throw new ExamError(404, 'Exam not found');
+  const scope = resolveScope(req.user);
+  if (!hasPermission(req.user, 'exams.publish') && !inScope(scope, exam)) {
+    throw new ExamError(403, 'You can only request a correction for your own exams');
+  }
   if (exam.status !== 'published') throw new ExamError(409, 'Exam is not published');
   const reason = text(body?.reason, 'reason', 3, 500);
-  db.prepare(`UPDATE exams SET status = 'draft', published_at = NULL, published_by = NULL WHERE id = ?`).run(id);
-  logAudit(req, { module: 'exams', action: 'unpublished', description: `Unpublished exam #${id}: ${reason}`,
-    previousValue: { status: 'published', published_at: exam.published_at }, newValue: { status: 'draft', reason } });
-  return getExamRow(id);
+  if (db.prepare("SELECT id FROM exam_unpublish_requests WHERE exam_id = ? AND status = 'pending'").get(id)) {
+    throw new ExamError(409, 'A correction request for this exam is already waiting for approval');
+  }
+  const rid = Number(db.prepare(`INSERT INTO exam_unpublish_requests (exam_id, reason, requested_by, requested_by_emp_no)
+    VALUES (?, ?, ?, (SELECT employee_no FROM users WHERE id = ?))`).run(id, reason, req.user.id, req.user.id).lastInsertRowid);
+  logAudit(req, { module: 'exams', action: 'unpublish_requested', description: `Requested a correction on exam #${id}: ${reason}`,
+    newValue: { request_id: rid, exam_id: id, reason } });
+  return db.prepare(`${REQUEST_SELECT} WHERE r.id = ?`).get(rid);
+}
+
+export function listUnpublishRequests({ status = 'pending' } = {}) {
+  if (!['pending', 'approved', 'rejected', 'all'].includes(status)) throw new ExamError(400, 'status must be pending, approved, rejected, or all');
+  const rows = status === 'all'
+    ? db.prepare(`${REQUEST_SELECT} ORDER BY r.id DESC`).all()
+    : db.prepare(`${REQUEST_SELECT} WHERE r.status = ? ORDER BY r.id DESC`).all(status);
+  return rows;
+}
+
+export function decideUnpublishRequest(req, rid, body) {
+  const decision = body?.decision;
+  if (decision !== 'approve' && decision !== 'reject') throw new ExamError(400, 'decision must be approve or reject');
+  const note = body?.note === undefined || body?.note === null || body?.note === '' ? null : text(body.note, 'note', 1, 500);
+  const r = db.prepare('SELECT * FROM exam_unpublish_requests WHERE id = ?').get(rid);
+  if (!r) throw new ExamError(404, 'Request not found');
+  if (r.status !== 'pending') throw new ExamError(409, `This request is already ${r.status}`);
+  if (r.requested_by === req.user.id) throw new ExamError(403, 'Another person must decide this request');
+
+  const exam = getExamRow(r.exam_id);
+  const where = `${exam.subject_name}, class ${exam.class_level}${exam.section ? ` ${exam.section}` : ''}, ${exam.term_name}`;
+  if (decision === 'approve') {
+    if (exam.status !== 'published') throw new ExamError(409, 'The exam is no longer published');
+    db.transaction(() => {
+      db.prepare(`UPDATE exam_unpublish_requests SET status = 'approved', decided_by = ?, decided_by_emp_no = (SELECT employee_no FROM users WHERE id = ?), decided_at = datetime('now'), decision_note = ? WHERE id = ?`)
+        .run(req.user.id, req.user.id, note, rid);
+      db.prepare(`UPDATE exams SET status = 'draft', published_at = NULL, published_by = NULL WHERE id = ?`).run(r.exam_id);
+    })();
+    logAudit(req, { module: 'exams', action: 'unpublished',
+      description: `Unpublished exam #${r.exam_id} (${where}) on approval: ${r.reason}`,
+      previousValue: { status: 'published', publish_version: exam.publish_version },
+      newValue: { status: 'draft', request_id: rid, requested_by: r.requested_by, approved_by: req.user.id, reason: r.reason, note } });
+  } else {
+    db.prepare(`UPDATE exam_unpublish_requests SET status = 'rejected', decided_by = ?, decided_by_emp_no = (SELECT employee_no FROM users WHERE id = ?), decided_at = datetime('now'), decision_note = ? WHERE id = ?`)
+      .run(req.user.id, req.user.id, note, rid);
+    logAudit(req, { module: 'exams', action: 'unpublish_rejected', description: `Rejected correction request #${rid} on exam #${r.exam_id}${note ? `: ${note}` : ''}`,
+      newValue: { request_id: rid, decision_note: note } });
+  }
+  return db.prepare(`${REQUEST_SELECT} WHERE r.id = ?`).get(rid);
 }
 
 // ---------- guardian view ----------

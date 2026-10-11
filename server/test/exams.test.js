@@ -75,6 +75,8 @@ before(async () => {
   addUser('g2', { role: 'guardian', roleKey: 'guardian' }); // linked to s2, results turned off by admin in a test
   addUser('g3', { role: 'guardian', roleKey: 'guardian' }); // linked to s3 but restricted
   addUser('g4', { role: 'guardian', roleKey: 'guardian' }); // linked to s4 (other section)
+  addUser('head', { role: 'teacher', roleKey: 'academic_head' });
+  addUser('classT', { role: 'teacher', roleKey: 'subject_teacher' }); // homeroom teacher of 7 B
 
   sessionId = Number(db.prepare("INSERT INTO academic_sessions (name, start_date, end_date, is_active) VALUES ('2026-2027','2026-04-01','2027-03-31',1)").run().lastInsertRowid);
   mathId = Number(db.prepare("INSERT INTO subjects (class_level, name) VALUES (7, 'Mathematics')").run().lastInsertRowid);
@@ -85,6 +87,8 @@ before(async () => {
   const asg = db.prepare('INSERT INTO teacher_assignments (teacher_id, class_level, section, subject_id, is_class_teacher) VALUES (?,?,?,?,0)');
   asg.run(ID.mathT, 7, 'B', mathId);   // Maths teacher: class 7 section B only
   asg.run(ID.sciT, 7, 'B', sciId);     // Science teacher: class 7 section B only
+  db.prepare('INSERT INTO teacher_assignments (teacher_id, class_level, section, subject_id, is_class_teacher) VALUES (?,?,?,?,1)')
+    .run(ID.classT, 7, 'B', sciId);     // homeroom for 7 B
 
   db.prepare('INSERT INTO guardian_students (guardian_id, student_id, relationship, is_primary, can_view_attendance, can_view_fees, restricted) VALUES (?,?,?,?,1,0,0)')
     .run(ID.g1, ID.s1, 'father', 1);
@@ -356,26 +360,93 @@ test('a guardian of a section A child sees no results when that child has no pub
   assert.deepEqual(g4.body.results, [], 'section A child has no published exam here');
 });
 
-// ---------- correcting a published exam ----------
+// ---------- correcting a published exam: request, then a second person decides ----------
 
-test('unpublish needs a reason, then hides results from the guardian until republished', async () => {
-  const noReason = await call('coord', 'POST', `/api/exams/${examB}/unpublish`, {});
-  assert.equal(noReason.status, 400);
+test('a correction is requested by a teacher with a reason, and the exam stays published until approved', async () => {
+  const short = await call('mathT', 'POST', `/api/exams/${examB}/unpublish-requests`, { reason: 'x' });
+  assert.equal(short.status, 400);
 
-  const un = await call('coord', 'POST', `/api/exams/${examB}/unpublish`, { reason: 'Wrong mark entered for one student' });
-  assert.equal(un.status, 200, JSON.stringify(un.body));
-  assert.equal(un.body.exam.status, 'draft');
+  const reason = 'Re-evaluation of Mathematics Paper - Section B tally error';
+  const req1 = await call('mathT', 'POST', `/api/exams/${examB}/unpublish-requests`, { reason });
+  assert.equal(req1.status, 201, JSON.stringify(req1.body));
+  assert.equal(req1.body.request.status, 'pending');
+  const rid = req1.body.request.id;
 
+  const dup = await call('mathT', 'POST', `/api/exams/${examB}/unpublish-requests`, { reason });
+  assert.equal(dup.status, 409, 'only one pending request per exam');
+
+  // Still published: the guardian keeps seeing the results until someone else approves.
   const g1 = await call('g1', 'GET', `/api/guardian/children/${ID.s1}/results`);
-  assert.deepEqual(g1.body.results, []);
+  assert.equal(g1.body.results.length, 1);
+
+  // The requester cannot decide their own request (no exams.publish).
+  const selfDecide = await call('mathT', 'POST', `/api/exams/unpublish-requests/${rid}/decision`, { decision: 'approve' });
+  assert.equal(selfDecide.status, 403);
+
+  const list = await call('coord', 'GET', '/api/exams/unpublish-requests');
+  assert.ok(list.body.requests.some(r => r.id === rid && r.requested_by_name === 'mathT'));
+
+  const approve = await call('coord', 'POST', `/api/exams/unpublish-requests/${rid}/decision`, { decision: 'approve', note: 'Confirmed against the answer sheets' });
+  assert.equal(approve.status, 200, JSON.stringify(approve.body));
+  assert.equal(approve.body.request.status, 'approved');
+  assert.equal((await call('coord', 'GET', `/api/exams/${examB}`)).body.exam.status, 'draft');
+
+  const hidden = await call('g1', 'GET', `/api/guardian/children/${ID.s1}/results`);
+  assert.deepEqual(hidden.body.results, [], 'once approved, the guardian no longer sees the results');
 
   const fix = await call('mathT', 'PUT', `/api/exams/${examB}/marks`, { marks: [{ student_id: ID.s2, ...splitMarks(40, 20) }] });
-  assert.equal(fix.status, 200, 'marks can be edited again while draft');
+  assert.equal(fix.status, 200, 'marks can be corrected in draft');
+  const again = await call('coord', 'POST', `/api/exams/unpublish-requests/${rid}/decision`, { decision: 'approve' });
+  assert.equal(again.status, 409, 'a decided request cannot be decided again');
+});
 
-  const republish = await call('coord', 'POST', `/api/exams/${examB}/publish`);
-  assert.equal(republish.status, 200, JSON.stringify(republish.body));
-  const g1b = await call('g1', 'GET', `/api/guardian/children/${ID.s1}/results`);
-  assert.equal(g1b.body.results.length, 1);
+test('re-publish after a correction notifies the academic head, exam coordinator and class teacher, not the subject teacher', async () => {
+  const pub = await call('coord', 'POST', `/api/exams/${examB}/publish`);
+  assert.equal(pub.status, 200, JSON.stringify(pub.body));
+  assert.equal(pub.body.exam.publish_version, 2);
+
+  const rows = db.prepare("SELECT user_id FROM notifications WHERE related_id = ? AND type = 'grade' AND title LIKE 'Results re-published%'").all(examB).map(r => r.user_id);
+  assert.ok(rows.includes(ID.head), 'academic head is told');
+  assert.ok(rows.includes(ID.coord), 'exam coordinator is told');
+  assert.ok(rows.includes(ID.classT), 'class teacher of the section is told');
+  assert.ok(!rows.includes(ID.mathT), 'the subject teacher is not sent it (not the class teacher)');
+  assert.ok(!rows.includes(ID.s1), 'students are not sent it');
+});
+
+test('nobody approves their own correction request; an admin can approve a coordinator request', async () => {
+  const req1 = await call('coord', 'POST', `/api/exams/${examB}/unpublish-requests`, { reason: 'Mark sheet mismatch found during audit' });
+  assert.equal(req1.status, 201, JSON.stringify(req1.body));
+  const rid = req1.body.request.id;
+
+  const own = await call('coord', 'POST', `/api/exams/unpublish-requests/${rid}/decision`, { decision: 'approve' });
+  assert.equal(own.status, 403);
+  assert.match(own.body.error, /Another person/);
+  const ownReject = await call('coord', 'POST', `/api/exams/unpublish-requests/${rid}/decision`, { decision: 'reject' });
+  assert.equal(ownReject.status, 403);
+
+  const byAdmin = await call('admin', 'POST', `/api/exams/unpublish-requests/${rid}/decision`, { decision: 'approve' });
+  assert.equal(byAdmin.status, 200, JSON.stringify(byAdmin.body));
+  assert.equal((await call('coord', 'GET', `/api/exams/${examB}`)).body.exam.status, 'draft');
+
+  const again = await call('coord', 'POST', `/api/exams/${examB}/publish`);
+  assert.equal(again.status, 200);
+  assert.equal(again.body.exam.publish_version, 3);
+});
+
+test('a rejected request leaves the exam published and is recorded with a note', async () => {
+  const req1 = await call('mathT', 'POST', `/api/exams/${examB}/unpublish-requests`, { reason: 'Possible tally error in section B' });
+  assert.equal(req1.status, 201);
+  const rej = await call('coord', 'POST', `/api/exams/unpublish-requests/${req1.body.request.id}/decision`, { decision: 'reject', note: 'Checked: the tally is correct' });
+  assert.equal(rej.status, 200);
+  assert.equal(rej.body.request.status, 'rejected');
+  assert.equal((await call('coord', 'GET', `/api/exams/${examB}`)).body.exam.status, 'published');
+  const g1 = await call('g1', 'GET', `/api/guardian/children/${ID.s1}/results`);
+  assert.equal(g1.body.results.length, 1);
+});
+
+test('only exam controllers see the request queue; teachers and guardians cannot', async () => {
+  assert.equal((await call('mathT', 'GET', '/api/exams/unpublish-requests')).status, 403);
+  assert.equal((await call('g1', 'GET', '/api/exams/unpublish-requests')).status, 403);
 });
 
 // ---------- audit ----------
@@ -393,5 +464,8 @@ test('every marks change and publish step is audited with previous and new value
     assert.ok(actions.includes(a), `${a} is audited`);
   }
   const un = db.prepare("SELECT description FROM audit_logs WHERE module = 'exams' AND action = 'unpublished'").get();
-  assert.match(un.description, /Wrong mark/);
+  assert.match(un.description, /Re-evaluation of Mathematics/, 'the approved reason is in the audit');
+  for (const a of ['unpublish_requested', 'unpublish_rejected', 'republished']) {
+    assert.ok(db.prepare('SELECT id FROM audit_logs WHERE module = ? AND action = ?').get('exams', a), `${a} is audited`);
+  }
 });

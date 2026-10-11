@@ -35,6 +35,7 @@ addColumnIfMissing('guardian_students', 'can_view_results', 'INTEGER NOT NULL DE
 addColumnIfMissing('grading_scales', 'theory_min_percent', 'REAL');
 addColumnIfMissing('grading_scales', 'internal_min_percent', 'REAL');
 addColumnIfMissing('exam_marks', 'ng_reason', 'TEXT');
+addColumnIfMissing('exams', 'publish_version', 'INTEGER NOT NULL DEFAULT 0');
 // Bumped on password reset, disable, archive or anonymize. Tokens carry the version they were issued under.
 addColumnIfMissing('users', 'session_version', 'INTEGER DEFAULT 0');
 addColumnIfMissing('users', 'approval_status', "TEXT DEFAULT 'approved'");
