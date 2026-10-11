@@ -8,7 +8,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 
 import './db/index.js';
 import './db/seed.js';
@@ -99,9 +99,25 @@ export function createApp() {
   // Missing or rejected files stop here, so they never fall through to the web app shell.
   app.use('/uploads', (req, res) => res.status(404).json({ error: 'File not found' }));
 
-  // General API rate limit, plus a tighter limit on auth endpoints.
-  app.use('/api', rateLimit({ windowMs: 15 * 60 * 1000, max: 600, standardHeaders: true, legacyHeaders: false }));
-  const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 50, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts, please try again later.' } });
+  // General API rate limit. Per IP, so a school whose staff share one office connection needs headroom.
+  const API_LIMIT = Number(process.env.API_RATE_LIMIT_PER_15MIN || 2000);
+  app.use('/api', rateLimit({ windowMs: 15 * 60 * 1000, max: API_LIMIT, standardHeaders: true, legacyHeaders: false }));
+
+  // Sign-in limits count only FAILED attempts (successful sign-ins never count). Two layers:
+  //  - per IP and email: 20 wrong passwords for one account from one connection;
+  //  - per IP: a ceiling for guessing across many accounts. Higher, so a shared NAT does not lock out a whole school.
+  // Refresh, /me, logout and permissions are not limited here; they are session calls, and the general limit covers them.
+  const authMsg = { error: 'Too many attempts, please try again later.' };
+  const loginFailLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false, skipSuccessfulRequests: true, message: authMsg,
+    keyGenerator: req => `${ipKeyGenerator(req.ip)}|${String(req.body?.email || '').trim().toLowerCase()}`,
+  });
+  const loginIpLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, max: Number(process.env.AUTH_IP_FAIL_LIMIT || 300), standardHeaders: true, legacyHeaders: false,
+    skipSuccessfulRequests: true, message: authMsg, keyGenerator: req => ipKeyGenerator(req.ip),
+  });
+  app.post('/api/auth/login', loginIpLimiter, loginFailLimiter);
+  app.post('/api/auth/setup', loginIpLimiter, loginFailLimiter);
 
   // Health check for the load balancer and uptime monitor. It runs a real query,
   // so a broken database returns 503 instead of a false "ok".
@@ -111,7 +127,7 @@ export function createApp() {
     res.status(dbOk ? 200 : 503).json({ ok: dbOk, db: dbOk, name: 'NITEX API', uptime_s: Math.round(process.uptime()) });
   });
 
-  app.use('/api/auth', authLimiter, authRoutes);
+  app.use('/api/auth', authRoutes);
   app.use('/api/subjects', subjectRoutes);
   app.use('/api/materials', materialRoutes);
   app.use('/api/assignments', assignmentRoutes);

@@ -22,12 +22,13 @@ import { resolveScope, isWithinScope } from '../services/scope.js';
 import { logAudit } from '../utils/audit.js';
 import { notifyUser } from '../utils/notify.js';
 import { queueAttendanceAlerts } from '../services/messaging/alerts.js';
+import { SCHOOL_TZ } from '../utils/schoolTime.js';
 
 const router = Router();
 
 export const ATTENDANCE_STATUSES = ['present', 'absent', 'late', 'excused', 'half_day'];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const TZ = process.env.ATTENDANCE_TZ || 'Asia/Kathmandu';
+const TZ = process.env.ATTENDANCE_TZ || SCHOOL_TZ;
 // Teachers may only edit a register for this many days back. Admins and
 // Academic Heads can correct older records (they are audited either way).
 const EDIT_WINDOW_DAYS = Number(process.env.ATTENDANCE_EDIT_WINDOW_DAYS || 7);

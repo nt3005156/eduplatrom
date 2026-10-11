@@ -20,6 +20,7 @@ function recordFailedLogin(userId) {
 }
 import { notifyAdmins } from '../utils/notify.js';
 import { levelForXp, gamificationEligible } from '../utils/gamification.js';
+import { schoolDate, schoolHour } from '../utils/schoolTime.js';
 import { logAudit } from '../utils/audit.js';
 import { resolveAllPermissions } from '../services/permissions.js';
 import { resolveScope, allowedClassLevels } from '../services/scope.js';
@@ -32,9 +33,9 @@ const SAFE_FIELDS = `id, name, email, role, class_level, section, gender, avatar
   pref_class_level, pref_section, pref_subject_id`;
 
 function streakStatus(streakLastDate) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = schoolDate();
   const studiedToday = streakLastDate === today;
-  const hour = new Date().getUTCHours();
+  const hour = schoolHour();
   return { studiedToday, atRisk: !studiedToday && hour >= 18 }; // "late in the day" heuristic
 }
 

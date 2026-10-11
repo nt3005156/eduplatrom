@@ -5,6 +5,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import bcrypt from 'bcryptjs';
+import { schoolDate, addDays } from '../src/utils/schoolTime.js';
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nitex-gamif-'));
 process.env.NODE_ENV = 'test';
@@ -18,11 +19,10 @@ const { awardXp, touchStreak, ageOn } = await import('../src/utils/gamification.
 let server, base;
 const PW = 'Gamification-Pass-2026';
 
+// Dates are built from the school's calendar day, the same clock the app uses for age.
 const isoYearsAgo = (years, offsetDays = 0) => {
-  const d = new Date();
-  d.setFullYear(d.getFullYear() - years);
-  d.setDate(d.getDate() + offsetDays);
-  return d.toISOString().slice(0, 10);
+  const [y, m, d] = schoolDate().split('-');
+  return addDays(`${Number(y) - years}-${m}-${d}`, offsetDays);
 };
 
 function addUser(email, role, dob) {

@@ -9,6 +9,7 @@ import { logAudit } from '../utils/audit.js';
 import { parseCsv, normalizeEmail, normalizePhone, isIsoDate, BLOOD_GROUPS, GUARDIAN_RELATIONSHIPS } from '../utils/validate.js';
 import { createSetupToken, unknownPasswordHash } from '../services/accountSetup.js';
 import { guardianRoleId } from '../services/guardians.js';
+import { schoolDate } from '../utils/schoolTime.js';
 
 const router = Router();
 export const MAX_IMPORT_ROWS = 2000;
@@ -40,7 +41,7 @@ export function validateImport(csvText) {
   const dataRows = grid.slice(1);
   if (dataRows.length > MAX_IMPORT_ROWS) return { fatal: `Import at most ${MAX_IMPORT_ROWS} rows at a time (this file has ${dataRows.length}).` };
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = schoolDate();
   const seenEmail = new Map();      // student email -> row
   const seenRoll = new Map();       // class|section|roll -> row
   const seenAdmission = new Map();  // admission_no -> row

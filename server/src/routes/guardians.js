@@ -10,6 +10,7 @@ import { invalidateUserRoleCache } from '../services/permissions.js';
 import { normalizeEmail, normalizePhone, isIsoDate, GUARDIAN_RELATIONSHIPS } from '../utils/validate.js';
 import { createSetupToken, unknownPasswordHash } from '../services/accountSetup.js';
 import { accessibleLink, visibleChildren, attendanceTally, guardianRoleId } from '../services/guardians.js';
+import { schoolDate, addDays } from '../utils/schoolTime.js';
 
 export const adminRouter = Router();
 export const portalRouter = Router();
@@ -210,8 +211,8 @@ function requireGuardian(req, res, next) {
 
 portalRouter.get('/children', requireAuth, requireGuardian, handle((req, res) => {
   const children = visibleChildren(req.user.id).map(c => {
-    const to = new Date().toISOString().slice(0, 10);
-    const from = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+    const to = schoolDate();
+    const from = addDays(to, -30);
     const t = c.can_view_attendance ? attendanceTally(c.student_id, from, to).daily : null;
     return {
       student_id: c.student_id, name: c.name, class_level: c.class_level, section: c.section, roll_no: c.roll_no,
@@ -240,8 +241,8 @@ portalRouter.get('/children/:studentId', requireAuth, requireGuardian, handle((r
 
 portalRouter.get('/children/:studentId/attendance', requireAuth, requireGuardian, handle((req, res) => {
   if (!childOr403(req, res, 'can_view_attendance')) return;
-  const from = req.query.from || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
-  const to = req.query.to || new Date().toISOString().slice(0, 10);
+  const to = req.query.to || schoolDate();
+  const from = req.query.from || addDays(to, -30);
   if (!isIsoDate(from) || !isIsoDate(to) || from > to) return res.status(400).json({ error: 'from/to must be valid YYYY-MM-DD dates with from <= to' });
   res.json(attendanceTally(Number(req.params.studentId), from, to));
 }));

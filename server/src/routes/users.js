@@ -4,6 +4,7 @@ import { requireAuth, requireAdmin, revokeSessions } from '../middleware/auth.js
 import { notifyUser } from '../utils/notify.js';
 import { logAudit } from '../utils/audit.js';
 import { normalizePhone, isIsoDate, BLOOD_GROUPS } from '../utils/validate.js';
+import { schoolDate } from '../utils/schoolTime.js';
 
 const router = Router();
 
@@ -155,7 +156,7 @@ router.patch('/:id/profile', requireAuth, requireAdmin, (req, res) => {
       v = p.value;
     } else if (key === 'dob_ad' && v !== null && !isIsoDate(v)) {
       return res.status(400).json({ error: 'dob_ad must be YYYY-MM-DD' });
-    } else if (key === 'dob_ad' && v !== null && v > new Date().toISOString().slice(0, 10)) {
+    } else if (key === 'dob_ad' && v !== null && v > schoolDate()) {
       return res.status(400).json({ error: 'dob_ad cannot be in the future' });
     } else if (key === 'dob_bs' && v !== null && !/^(19|20|21)\d{2}-\d{2}-\d{2}$/.test(v)) {
       return res.status(400).json({ error: 'dob_bs must be YYYY-MM-DD in the Bikram Sambat calendar' });

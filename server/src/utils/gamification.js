@@ -1,4 +1,5 @@
 import db from '../db/index.js';
+import { schoolDate, daysBetweenDates } from './schoolTime.js';
 
 // Phase 0: gamification is a per-school switch, off by default for pilots. When it is on, only students
 // who are at least 13 earn XP and streaks. A student with no date of birth is excluded (fail closed).
@@ -9,8 +10,10 @@ export function ageOn(dob, today = new Date()) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dob || ''));
   if (!m) return 0;
   const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  let age = today.getFullYear() - y;
-  const beforeBirthday = today.getMonth() + 1 < mo || (today.getMonth() + 1 === mo && today.getDate() < d);
+  // "Today" is the school's calendar date, so the age does not change at the server's midnight.
+  const [ty, tm, td] = schoolDate(today).split('-').map(Number);
+  let age = ty - y;
+  const beforeBirthday = tm < mo || (tm === mo && td < d);
   if (beforeBirthday) age -= 1;
   return age;
 }
@@ -31,13 +34,11 @@ const XP_RULES = {
 };
 
 function todayStr() {
-  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC, good enough for a daily streak)
+  return schoolDate(); // YYYY-MM-DD in the school's timezone, so a streak day starts at school midnight
 }
 
 function daysBetween(a, b) {
-  const d1 = new Date(a + 'T00:00:00Z');
-  const d2 = new Date(b + 'T00:00:00Z');
-  return Math.round((d2 - d1) / (1000 * 60 * 60 * 24));
+  return daysBetweenDates(a, b);
 }
 
 /**
