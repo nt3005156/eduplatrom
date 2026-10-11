@@ -2,6 +2,7 @@
 // so Nepali text is not printed yet. Amounts use NPR with Nepali grouping (money.js).
 import PDFDocument from 'pdfkit';
 import { formatNPR } from './money.js';
+import { registerPdfFonts } from '../pdf/fonts.js';
 
 const LEFT = 50;
 const RIGHT = 545;
@@ -20,6 +21,7 @@ export function renderReceiptPdf(r, { compress = true } = {}) {
       size: 'A4', margin: LEFT, compress,
       info: { Title: `Fee receipt ${r.receipt_no}`, Author: r.school_name || 'School', Creator: 'NITEX fee system' },
     });
+    registerPdfFonts(doc);
     const chunks = [];
     doc.on('data', c => chunks.push(c));
     doc.on('end', () => resolve(Buffer.concat(chunks)));

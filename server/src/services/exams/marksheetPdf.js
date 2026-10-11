@@ -4,6 +4,7 @@
 // Times are shown in Nepal time (UTC+05:45, no daylight saving).
 import PDFDocument from 'pdfkit';
 import { TERM_STATUS_LABEL } from './grading.js';
+import { registerPdfFonts } from '../pdf/fonts.js';
 
 const LEFT = 50;
 const RIGHT = 545;
@@ -26,6 +27,7 @@ export function renderMarksheetPdf(data, { compress = true, verifiedAt = new Dat
       size: 'A4', margin: LEFT, compress,
       info: { Title: `Marksheet - ${data.student.name} - ${data.term.name}`, Author: schoolName, Creator: 'NITEX exams' },
     });
+    registerPdfFonts(doc);
     const chunks = [];
     doc.on('data', c => chunks.push(c));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
