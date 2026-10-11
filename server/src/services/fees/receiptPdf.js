@@ -7,6 +7,13 @@ const LEFT = 50;
 const RIGHT = 545;
 const money = p => formatNPR(p);
 
+// The receipt date is the school's date (Asia/Kathmandu). A payment recorded between 00:00 and 05:45 Nepal
+// time is still the same Nepal day, even though its UTC timestamp is the day before.
+export function receiptDate(utcStamp) {
+  const d = new Date(String(utcStamp).replace(' ', 'T') + 'Z');
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kathmandu', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+}
+
 export function renderReceiptPdf(r, { compress = true } = {}) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
@@ -36,7 +43,7 @@ export function renderReceiptPdf(r, { compress = true } = {}) {
     doc.moveDown(0.8);
 
     line('Receipt no', String(r.receipt_no), { bold: true });
-    line('Date', new Date(String(r.date).replace(' ', 'T') + 'Z').toISOString().slice(0, 10));
+    line('Date', receiptDate(r.date));
     line('Status', r.status);
     line('Invoice', `${r.invoice_no}${r.period ? ` (${r.period})` : ''}`);
 
