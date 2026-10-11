@@ -1099,6 +1099,8 @@ CREATE TABLE IF NOT EXISTS exams (
   published_by INTEGER REFERENCES users(id),
   -- Increments on every publish. Report cards carry it, so a corrected version is identifiable.
   publish_version INTEGER NOT NULL DEFAULT 0,
+  -- Credit hours for the GPA weighting (directive: GPA = sum(GP x credit) / sum(credit)). Required on new exams.
+  credit_hours REAL CHECK(credit_hours IS NULL OR credit_hours > 0),
   created_by INTEGER REFERENCES users(id),
   created_at TEXT DEFAULT (datetime('now')),
   UNIQUE(term_id, class_level, section, subject_id)
@@ -1144,4 +1146,45 @@ CREATE TABLE IF NOT EXISTS exam_unpublish_requests (
   decision_note TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_unpublish_one_pending ON exam_unpublish_requests(exam_id) WHERE status = 'pending';
+
+-- Snapshot of each publish. Report cards read these, never the live exam_marks, so a corrected
+-- re-publish does not change an earlier version. Names are copied in so the record stands alone.
+CREATE TABLE IF NOT EXISTS exam_publications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  exam_id INTEGER NOT NULL REFERENCES exams(id) ON DELETE CASCADE,
+  publish_version INTEGER NOT NULL,
+  subject_name TEXT NOT NULL,
+  term_name TEXT NOT NULL,
+  class_level INTEGER NOT NULL,
+  section TEXT,
+  exam_date TEXT,
+  credit_hours REAL,
+  full_marks REAL NOT NULL,
+  theory_full REAL,
+  internal_full REAL,
+  grading_scale_name TEXT NOT NULL,
+  theory_min_percent REAL,
+  internal_min_percent REAL,
+  student_count INTEGER NOT NULL,
+  published_at TEXT DEFAULT (datetime('now')),
+  published_by INTEGER REFERENCES users(id),
+  published_by_emp_no TEXT,
+  UNIQUE(exam_id, publish_version)
+);
+
+CREATE TABLE IF NOT EXISTS exam_mark_versions (
+  exam_id INTEGER NOT NULL REFERENCES exams(id) ON DELETE CASCADE,
+  publish_version INTEGER NOT NULL,
+  student_id INTEGER NOT NULL REFERENCES users(id),
+  is_absent INTEGER NOT NULL,
+  theory REAL,
+  internal REAL,
+  total REAL,
+  percent REAL,
+  grade TEXT NOT NULL,
+  grade_point REAL,
+  is_pass INTEGER NOT NULL,
+  ng_reason TEXT,
+  PRIMARY KEY (exam_id, publish_version, student_id)
+);
 

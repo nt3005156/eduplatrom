@@ -162,39 +162,65 @@ test('mark validation: range, decimals, and type', () => {
   assert.throws(() => validateMarkInput({ full_marks: 50 }, { mark: 51 }), /mark must be/);
 });
 
-// ---------- GPA summary (NG is not dropped) ----------
+// ---------- term summary: credit-weighted GPA, withheld when incomplete ----------
 
-test('summary: one NG among six A subjects gives GPA 3.09, not 3.60', () => {
-  // A plain AVG(grade_point) skips the NULL and returns 3.60. That would hide the NG.
-  const rows = [...Array(6)].map(() => ({ grade: 'A', grade_point: 3.6, is_pass: 1 }));
-  rows.push({ grade: 'NG', grade_point: null, is_pass: 0 });
-  const s = summarizeResults(rows);
-  assert.equal(s.subjects, 7);
-  assert.equal(s.ng_count, 1);
-  assert.equal(s.gpa, 3.09);
-  assert.equal(s.all_graded, false);
-});
-
-test('summary: all graded gives the mean of grade points', () => {
+test('summary: credit-weighted GPA = sum(grade point x credit) / sum(credit)', () => {
+  // (4.0 x 5 + 2.8 x 3) / 8 = 3.55. A plain mean would be 3.40.
   const s = summarizeResults([
-    { grade: 'A+', grade_point: 4.0, is_pass: 1 },
-    { grade: 'B', grade_point: 2.8, is_pass: 1 },
+    { grade: 'A+', grade_point: 4.0, is_pass: 1, credit_hours: 5 },
+    { grade: 'B', grade_point: 2.8, is_pass: 1, credit_hours: 3 },
   ]);
-  assert.equal(s.gpa, 3.4);
+  assert.equal(s.status, 'complete');
+  assert.equal(s.label, 'Complete');
+  assert.equal(s.gpa, 3.55);
+  assert.equal(s.credit_total, 8);
   assert.equal(s.all_graded, true);
 });
 
-test('summary: an absent subject makes the GPA not computable', () => {
+test('summary: one NG makes the term Incomplete / Not Fully Graded and withholds the GPA', () => {
+  // Six A subjects and one NG, 1 credit each. NG is 0.00 in the arithmetic (21.6 of 7 credits),
+  // but the GPA is not printed, so the average cannot look like a pass.
+  const rows = [...Array(6)].map(() => ({ grade: 'A', grade_point: 3.6, is_pass: 1, credit_hours: 1 }));
+  rows.push({ grade: 'NG', grade_point: null, is_pass: 0, credit_hours: 1 });
+  const s = summarizeResults(rows);
+  assert.equal(s.status, 'incomplete');
+  assert.equal(s.label, 'Incomplete / Not Fully Graded');
+  assert.equal(s.ng_count, 1);
+  assert.equal(s.weighted_points, 21.6);
+  assert.equal(s.credit_total, 7);
+  assert.equal(s.gpa, null, 'GPA is withheld, not 3.09 and not 3.60');
+  assert.equal(s.all_graded, false);
+});
+
+test('summary: an absent subject makes the term incomplete and withholds the GPA', () => {
   const s = summarizeResults([
-    { grade: 'A+', grade_point: 4.0, is_pass: 1 },
-    { grade: ABSENT_GRADE, grade_point: null, is_pass: 0 },
+    { grade: 'A+', grade_point: 4.0, is_pass: 1, credit_hours: 2 },
+    { grade: ABSENT_GRADE, grade_point: null, is_pass: 0, credit_hours: 2 },
   ]);
   assert.equal(s.absent_count, 1);
+  assert.equal(s.status, 'incomplete');
   assert.equal(s.gpa, null);
 });
 
+test('summary: a subject with no credit hours makes the GPA not calculable', () => {
+  const s = summarizeResults([
+    { grade: 'A', grade_point: 3.6, is_pass: 1, credit_hours: 4 },
+    { grade: 'A', grade_point: 3.6, is_pass: 1, credit_hours: null },
+  ]);
+  assert.equal(s.status, 'not_calculable');
+  assert.equal(s.missing_credit_count, 1);
+  assert.equal(s.gpa, null);
+});
+
+test('summary: NG takes precedence over missing credit (the term is still incomplete)', () => {
+  const s = summarizeResults([{ grade: 'NG', grade_point: null, is_pass: 0, credit_hours: null }]);
+  assert.equal(s.status, 'incomplete');
+});
+
 test('summary: no subjects gives no GPA', () => {
-  assert.deepEqual(summarizeResults([]), { subjects: 0, ng_count: 0, absent_count: 0, gpa: null, all_graded: false });
+  const s = summarizeResults([]);
+  assert.equal(s.status, 'no_results');
+  assert.equal(s.gpa, null);
 });
 
 // ---------- scale validation ----------

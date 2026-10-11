@@ -15,6 +15,9 @@ import { notifyUser } from '../../utils/notify.js';
 import { hasPermission } from '../permissions.js';
 import { validateBands, validateExamMarks, validateComponentMins, computeResult, summarizeResults, GradingError } from './grading.js';
 
+const versionLabel = v => `v1.${String(v).padStart(2, '0')}`;
+export { versionLabel };
+
 export class ExamError extends Error {
   constructor(status, message) {
     super(message);
@@ -109,6 +112,10 @@ export function createExam(req, body) {
   const examDate = body?.exam_date ?? null;
   if (examDate !== null && !isIsoDate(examDate)) throw new ExamError(400, 'exam_date must be YYYY-MM-DD');
   const scaleId = int(body?.grading_scale_id, 'grading_scale_id');
+  const creditHours = body?.credit_hours === undefined || body?.credit_hours === null ? NaN : Number(body.credit_hours);
+  if (!Number.isFinite(creditHours) || creditHours <= 0 || creditHours > 10 || Math.abs(creditHours * 100 - Math.round(creditHours * 100)) > 1e-6) {
+    throw new ExamError(400, 'credit_hours is required: a number above 0 and up to 10, with at most 2 decimals');
+  }
   const cfg = grading(() => validateExamMarks({
     full_marks: Number(body?.full_marks),
     theory_full: body?.theory_full ?? null,
@@ -126,9 +133,9 @@ export function createExam(req, body) {
     AND ((section IS NULL AND ? IS NULL) OR section = ?)`).get(termId, classLevel, subjectId, section, section);
   if (dup) throw new ExamError(409, 'An exam for this subject, class and section already exists in this term');
 
-  const id = Number(db.prepare(`INSERT INTO exams (term_id, class_level, section, subject_id, exam_date, full_marks, theory_full, internal_full, grading_scale_id, created_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?)`).run(termId, classLevel, section, subjectId, examDate, cfg.full_marks, cfg.theory_full, cfg.internal_full, scaleId, req.user.id).lastInsertRowid);
-  logAudit(req, { module: 'exams', action: 'exam_created', description: `Created exam #${id} (class ${classLevel}${section ? ` ${section}` : ''}, subject #${subjectId})`, newValue: { id, ...cfg, term_id: termId, class_level: classLevel, section, subject_id: subjectId } });
+  const id = Number(db.prepare(`INSERT INTO exams (term_id, class_level, section, subject_id, exam_date, full_marks, theory_full, internal_full, grading_scale_id, credit_hours, created_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(termId, classLevel, section, subjectId, examDate, cfg.full_marks, cfg.theory_full, cfg.internal_full, scaleId, creditHours, req.user.id).lastInsertRowid);
+  logAudit(req, { module: 'exams', action: 'exam_created', description: `Created exam #${id} (class ${classLevel}${section ? ` ${section}` : ''}, subject #${subjectId})`, newValue: { id, ...cfg, credit_hours: creditHours, term_id: termId, class_level: classLevel, section, subject_id: subjectId } });
   return getExamRow(id);
 }
 
@@ -262,8 +269,21 @@ export function publishExam(req, id) {
     throw new ExamError(409, `${missing.length} student(s) have no mark or absent flag yet: ${names}${missing.length > 5 ? ', and others' : ''}`);
   }
   const version = exam.publish_version + 1;
-  db.prepare(`UPDATE exams SET status = 'published', published_at = datetime('now'), published_by = ?, publish_version = ? WHERE id = ?`)
-    .run(req.user.id, version, id);
+  const mins = scaleMins(exam.grading_scale_id);
+  // Publish, snapshot the publication, and snapshot every mark, all in one transaction.
+  db.transaction(() => {
+    db.prepare(`UPDATE exams SET status = 'published', published_at = datetime('now'), published_by = ?, publish_version = ? WHERE id = ?`)
+      .run(req.user.id, version, id);
+    db.prepare(`INSERT INTO exam_publications (exam_id, publish_version, subject_name, term_name, class_level, section, exam_date, credit_hours,
+        full_marks, theory_full, internal_full, grading_scale_name, theory_min_percent, internal_min_percent, student_count, published_by, published_by_emp_no)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, (SELECT employee_no FROM users WHERE id = ?))`)
+      .run(id, version, exam.subject_name, exam.term_name, exam.class_level, exam.section, exam.exam_date, exam.credit_hours,
+        exam.full_marks, exam.theory_full, exam.internal_full, exam.scale_name, mins.theory_min_percent, mins.internal_min_percent,
+        roster.length, req.user.id, req.user.id);
+    db.prepare(`INSERT INTO exam_mark_versions (exam_id, publish_version, student_id, is_absent, theory, internal, total, percent, grade, grade_point, is_pass, ng_reason)
+      SELECT exam_id, ?, student_id, is_absent, theory, internal, total, percent, grade, grade_point, is_pass, ng_reason FROM exam_marks WHERE exam_id = ?`)
+      .run(version, id);
+  })();
   const where = `${exam.subject_name}, class ${exam.class_level}${exam.section ? ` ${exam.section}` : ''}, ${exam.term_name}`;
   logAudit(req, { module: 'exams', action: 'published', description: `Published exam #${id} (${where}), version ${version}`,
     previousValue: { status: 'draft', publish_version: exam.publish_version }, newValue: { status: 'published', students: roster.length, publish_version: version } });
@@ -353,33 +373,69 @@ export function decideUnpublishRequest(req, rid, body) {
 
 // ---------- guardian view ----------
 
+// Rows from the snapshot at each exam's current publish_version. Only published exams.
+function snapshotRows(studentId, termId = null) {
+  const params = termId ? [studentId, termId] : [studentId];
+  return db.prepare(`SELECT e.id AS exam_id, e.publish_version, e.term_id, p.term_name, p.subject_name, p.exam_date,
+      p.credit_hours, p.full_marks, p.theory_full, p.internal_full, p.published_at, p.published_by, p.published_by_emp_no,
+      v.is_absent, v.theory, v.internal, v.total, v.percent, v.grade, v.grade_point, v.is_pass, v.ng_reason
+    FROM exams e
+    JOIN exam_publications p ON p.exam_id = e.id AND p.publish_version = e.publish_version
+    JOIN exam_mark_versions v ON v.exam_id = e.id AND v.publish_version = e.publish_version AND v.student_id = ?
+    JOIN exam_terms t ON t.id = e.term_id
+    JOIN subjects sub ON sub.id = e.subject_id
+    WHERE e.status = 'published' ${termId ? 'AND e.term_id = ?' : ''}
+    ORDER BY t.id, p.subject_name`).all(...params).map(r => ({ ...r, is_absent: !!r.is_absent, is_pass: !!r.is_pass }));
+}
+
 /**
- * Published results for one child, with a GPA summary per term (a marksheet is read per term).
+ * Published results for one child, with a term summary (GPA withheld when incomplete).
  * The caller checks the guardian link first.
  */
 export function publishedResultsFor(studentId) {
-  const results = db.prepare(`SELECT e.id AS exam_id, t.id AS term_id, t.name AS term_name, sub.name AS subject_name, e.exam_date,
-      e.full_marks, e.theory_full, e.internal_full,
-      m.is_absent, m.theory, m.internal, m.total, m.percent, m.grade, m.grade_point, m.is_pass, m.ng_reason, e.published_at
-    FROM exam_marks m
-    JOIN exams e ON e.id = m.exam_id
-    JOIN exam_terms t ON t.id = e.term_id
-    JOIN subjects sub ON sub.id = e.subject_id
-    WHERE m.student_id = ? AND e.status = 'published'
-    ORDER BY t.id, sub.name`).all(studentId).map(r => ({ ...r, is_absent: !!r.is_absent, is_pass: !!r.is_pass }));
-
-  const terms = [];
+  const results = snapshotRows(studentId);
   const byTerm = new Map();
   for (const r of results) {
-    if (!byTerm.has(r.term_id)) {
-      const t = { term_id: r.term_id, term_name: r.term_name, rows: [] };
-      byTerm.set(r.term_id, t);
-      terms.push(t);
-    }
+    if (!byTerm.has(r.term_id)) byTerm.set(r.term_id, { term_id: r.term_id, term_name: r.term_name, rows: [] });
     byTerm.get(r.term_id).rows.push(r);
   }
   return {
     results,
-    terms: terms.map(t => ({ term_id: t.term_id, term_name: t.term_name, summary: summarizeResults(t.rows) })),
+    terms: [...byTerm.values()].map(t => ({ term_id: t.term_id, term_name: t.term_name, summary: summarizeResults(t.rows) })),
+  };
+}
+
+const signOffId = r => r.published_by_emp_no || `USR-${r.published_by}`;
+
+/**
+ * Everything a marksheet prints, read from the publication snapshots only.
+ * Refuses (409) while any subject for this student is still unpublished, so a partial marksheet
+ * is never issued. Also refuses if a published subject has no snapshot mark for the student.
+ */
+export function marksheetFor(studentId, termId) {
+  const student = db.prepare("SELECT id, name, roll_no, class_level, section FROM users WHERE id = ? AND role = 'student'").get(studentId);
+  if (!student) throw new ExamError(404, 'Student not found');
+  const term = db.prepare(`SELECT t.id, t.name, s.name AS session_name FROM exam_terms t
+    JOIN academic_sessions s ON s.id = t.session_id WHERE t.id = ?`).get(termId);
+  if (!term) throw new ExamError(404, 'Exam term not found');
+
+  const exams = db.prepare(`SELECT id, status, publish_version FROM exams
+    WHERE term_id = ? AND class_level = ? AND (section IS NULL OR section = ?)`).all(termId, student.class_level, student.section);
+  if (exams.length === 0) throw new ExamError(404, 'No exams for this student in this term');
+  const pending = exams.filter(e => e.status !== 'published').length;
+  if (pending) throw new ExamError(409, `Not every subject is published yet (${pending} pending). A marksheet is issued only when all are published.`);
+
+  const rows = snapshotRows(studentId, termId);
+  if (rows.length !== exams.length) throw new ExamError(409, 'A published subject has no mark for this student. Check the roster.');
+
+  return {
+    student, term,
+    rows: rows.map(r => ({ ...r, version_label: versionLabel(r.publish_version) })),
+    summary: summarizeResults(rows),
+    footer: {
+      version_labels: [...new Set(rows.map(r => versionLabel(r.publish_version)))],
+      sign_off_ids: [...new Set(rows.map(signOffId))],
+      published_at: [...new Set(rows.map(r => r.published_at))],
+    },
   };
 }

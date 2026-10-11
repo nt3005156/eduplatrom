@@ -2,6 +2,7 @@
 //   /api/exams/*                   staff. Permission per route (exams.view, exams.enter_marks, exams.manage, exams.publish).
 //                                  Class and subject scope is enforced in services/exams/exams.js.
 //   /api/guardian/children/:studentId/results   guardian portal. Published marks only, for a linked child with can_view_results.
+//   .../marksheet.pdf                 PDF built from the publication snapshots. 409 while any subject is unpublished.
 // Business rules live in services/exams/exams.js and services/exams/grading.js.
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
@@ -9,6 +10,9 @@ import { requirePermission, hasPermission } from '../services/permissions.js';
 import { accessibleLink } from '../services/guardians.js';
 import * as exams from '../services/exams/exams.js';
 import { ExamError } from '../services/exams/exams.js';
+import { renderMarksheetPdf } from '../services/exams/marksheetPdf.js';
+import { logAudit } from '../utils/audit.js';
+import db from '../db/index.js';
 
 export const examsRouter = Router();
 export const examsPortalRouter = Router();
@@ -86,6 +90,27 @@ examsRouter.post('/unpublish-requests/:rid/decision', requireAuth, requirePermis
   res.json({ request: exams.decideUnpublishRequest(req, Number(req.params.rid), req.body) });
 }));
 
+// ---------- marksheet PDF ----------
+const schoolName = () => db.prepare('SELECT school_name, site_name FROM settings WHERE id = 1').get()?.school_name || 'School';
+// Built only from the publication snapshots (marksheetFor), never from live marks.
+async function sendMarksheet(req, res, studentId, termId, schoolName) {
+  const data = exams.marksheetFor(studentId, termId);
+  const pdf = await renderMarksheetPdf(data, { verifiedAt: new Date(), schoolName });
+  const versions = data.footer.version_labels;
+  logAudit(req, { module: 'exams', action: 'marksheet_issued',
+    description: `Issued marksheet for student #${studentId}, term #${termId}, ${versions.join(', ')}`,
+    newValue: { student_id: studentId, term_id: termId, versions, summary_status: data.summary.status, gpa: data.summary.gpa } });
+  res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="marksheet-${studentId}-${termId}.pdf"`, 'Cache-Control': 'no-store' });
+  res.send(pdf);
+}
+
+examsRouter.get('/terms/:termId/students/:studentId/marksheet.pdf', requireAuth, requirePermission('exams.manage'), wrap((req, res) => {
+  const termId = Number(req.params.termId);
+  const studentId = Number(req.params.studentId);
+  if (!Number.isInteger(termId) || !Number.isInteger(studentId) || termId <= 0 || studentId <= 0) throw new ExamError(400, 'Invalid id');
+  return sendMarksheet(req, res, studentId, termId, schoolName());
+}));
+
 // ---------- guardian portal ----------
 function requireGuardian(req, res, next) {
   if (req.user?.role !== 'guardian') return res.status(403).json({ error: 'Guardian accounts only' });
@@ -100,4 +125,15 @@ examsPortalRouter.get('/children/:studentId/results', requireAuth, requireGuardi
   }
   const { results, terms } = exams.publishedResultsFor(studentId);
   res.json({ student_id: studentId, results, terms });
+}));
+
+// Guardian copy of the same marksheet. Needs a link with can_view_results. Otherwise 404.
+examsPortalRouter.get('/children/:studentId/terms/:termId/marksheet.pdf', requireAuth, requireGuardian, wrap((req, res) => {
+  const studentId = Number(req.params.studentId);
+  const termId = Number(req.params.termId);
+  if (!Number.isInteger(studentId) || studentId <= 0 || !Number.isInteger(termId) || termId <= 0
+      || !accessibleLink(req.user.id, studentId, 'can_view_results')) {
+    throw new ExamError(404, 'Results not found');
+  }
+  return sendMarksheet(req, res, studentId, termId, schoolName());
 }));

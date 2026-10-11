@@ -187,19 +187,40 @@ export function computeResult(exam, input, bands, mins = {}) {
 }
 
 /**
- * Summary across one student's subjects (for a marksheet or a guardian view).
- * Deliberately not a plain AVG(grade_point): SQL AVG skips NULL, so an NG subject would
- * silently raise the GPA. Here NG counts as 0.00, and any absent subject makes the GPA not computable.
- * The GPA is a simple mean across subjects. Confirm the formula against the directive before go-live.
+ * Term summary for one student's subjects (marksheet, guardian view).
+ * Credit-weighted, as in the directive: GPA = sum(grade point x credit hours) / sum(credit hours).
+ *  - Any NG or absent subject: status 'incomplete' ("Incomplete / Not Fully Graded"). GPA is withheld (null).
+ *    NG counts as 0.00 in the arithmetic, so a plain AVG() is never used (SQL AVG skips NULL and would inflate it).
+ *  - A subject with no credit hours: status 'not_calculable'. GPA is withheld.
+ *  - Otherwise 'complete', and the GPA is returned to 2 decimals.
+ * Confirm the formula and the status wording against the directive before go-live.
  */
+export const TERM_STATUS_LABEL = Object.freeze({
+  complete: 'Complete',
+  incomplete: 'Incomplete / Not Fully Graded',
+  not_calculable: 'Not calculable: credit hours missing',
+  no_results: 'No results',
+});
+
 export function summarizeResults(rows) {
-  const subjects = rows.length;
+  if (rows.length === 0) {
+    return { status: 'no_results', label: TERM_STATUS_LABEL.no_results, subjects: 0, ng_count: 0, absent_count: 0,
+      missing_credit_count: 0, credit_total: 0, weighted_points: null, gpa: null, all_graded: false };
+  }
   const ng_count = rows.filter(r => r.grade !== ABSENT_GRADE && !r.is_pass).length;
   const absent_count = rows.filter(r => r.grade === ABSENT_GRADE).length;
-  let gpa = null;
-  if (subjects > 0 && absent_count === 0) {
-    const sum = rows.reduce((acc, r) => acc + (r.is_pass ? (r.grade_point ?? 0) : 0), 0);
-    gpa = Math.round((sum / subjects) * 100) / 100;
-  }
-  return { subjects, ng_count, absent_count, gpa, all_graded: subjects > 0 && ng_count === 0 && absent_count === 0 };
+  const missing_credit_count = rows.filter(r => !(Number(r.credit_hours) > 0)).length;
+  const credit_total = rows.reduce((acc, r) => acc + (Number(r.credit_hours) || 0), 0);
+  const weighted = rows.reduce((acc, r) => acc + (r.is_pass ? (r.grade_point ?? 0) : 0) * (Number(r.credit_hours) || 0), 0);
+
+  let status;
+  if (ng_count > 0 || absent_count > 0) status = 'incomplete';
+  else if (missing_credit_count > 0) status = 'not_calculable';
+  else status = 'complete';
+
+  const gpa = status === 'complete' ? Math.round((weighted / credit_total) * 100) / 100 : null;
+  return {
+    status, label: TERM_STATUS_LABEL[status], subjects: rows.length, ng_count, absent_count, missing_credit_count,
+    credit_total, weighted_points: Math.round(weighted * 10000) / 10000, gpa, all_graded: status === 'complete',
+  };
 }

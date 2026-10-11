@@ -18,6 +18,8 @@ process.env.PUBLIC_BASE_URL = 'https://school.example.test';
 
 const { createApp } = await import('../src/app.js');
 const { default: db } = await import('../src/db/index.js');
+const { marksheetFor, publishedResultsFor } = await import('../src/services/exams/exams.js');
+const { renderMarksheetPdf } = await import('../src/services/exams/marksheetPdf.js');
 
 const PW = 'Exam-Test-Pass-2026';
 const ID = {};
@@ -128,7 +130,7 @@ test('only exam_coordinator (and admin) may create terms and exams', async () =>
 });
 
 test('exam creation validates subject-class match, split config, section, and duplicates', async () => {
-  const base_ = { term_id: termId, class_level: 7, section: 'B', subject_id: mathId, exam_date: '2026-11-10', full_marks: 100, theory_full: 75, internal_full: 25, grading_scale_id: seeScaleId };
+  const base_ = { term_id: termId, class_level: 7, section: 'B', subject_id: mathId, exam_date: '2026-11-10', full_marks: 100, theory_full: 75, internal_full: 25, grading_scale_id: seeScaleId, credit_hours: 5 };
   const wrongClass = await call('coord', 'POST', '/api/exams', { ...base_, subject_id: math8Id });
   assert.equal(wrongClass.status, 400);
   assert.match(wrongClass.body.error, /not taught in this class/);
@@ -141,6 +143,11 @@ test('exam creation validates subject-class match, split config, section, and du
 
   const badDate = await call('coord', 'POST', '/api/exams', { ...base_, exam_date: '10/11/2026' });
   assert.equal(badDate.status, 400);
+  const { credit_hours: _ch, ...noCreditBody } = base_;
+  const noCredit = await call('coord', 'POST', '/api/exams', noCreditBody);
+  assert.equal(noCredit.status, 400, 'credit_hours is required');
+  const bigCredit = await call('coord', 'POST', '/api/exams', { ...base_, credit_hours: 11 });
+  assert.equal(bigCredit.status, 400, 'credit_hours above 10 is refused');
 
   const ok = await call('coord', 'POST', '/api/exams', base_);
   assert.equal(ok.status, 201, JSON.stringify(ok.body));
@@ -179,7 +186,7 @@ test('a custom scale must cover 0 to 100 and is then usable by an exam', async (
   assert.equal(see.bands.length, 8, 'SEE is seeded with 8 bands');
 
   const sci = await call('coord', 'POST', '/api/exams', {
-    term_id: termId, class_level: 7, section: 'B', subject_id: sciId, full_marks: 100, grading_scale_id: customScaleId,
+    term_id: termId, class_level: 7, section: 'B', subject_id: sciId, full_marks: 100, grading_scale_id: customScaleId, credit_hours: 3,
   });
   assert.equal(sci.status, 201, JSON.stringify(sci.body));
   examSci = sci.body.exam.id;
@@ -332,7 +339,14 @@ test('guardian sees published results for a linked child, with the stored grade'
   assert.equal(r.grade_point, 4);
   assert.equal(r.is_pass, true);
   assert.equal(g1.body.terms.length, 1);
-  assert.deepEqual(g1.body.terms[0].summary, { subjects: 1, ng_count: 0, absent_count: 0, gpa: 4, all_graded: true });
+  const sum = g1.body.terms[0].summary;
+  assert.equal(sum.status, 'complete');
+  assert.equal(sum.subjects, 1);
+  assert.equal(sum.ng_count, 0);
+  assert.equal(sum.absent_count, 0);
+  assert.equal(sum.credit_total, 5, 'credit hours from the snapshot');
+  assert.equal(sum.gpa, 4, 'A+ at 4.0 over 5 credit hours');
+  assert.equal(sum.all_graded, true);
 });
 
 test('guardian gets nothing for a child who is not linked, or for a restricted link', async () => {
@@ -447,6 +461,147 @@ test('a rejected request leaves the exam published and is recorded with a note',
 test('only exam controllers see the request queue; teachers and guardians cannot', async () => {
   assert.equal((await call('mathT', 'GET', '/api/exams/unpublish-requests')).status, 403);
   assert.equal((await call('g1', 'GET', '/api/exams/unpublish-requests')).status, 403);
+});
+
+// ---------- marksheet PDF: built from the publication snapshots ----------
+
+async function raw(who, url) {
+  const headers = who ? { Authorization: `Bearer ${T[who]}`, 'X-NITEX-Client': 'web' } : { 'X-NITEX-Client': 'web' };
+  const r = await fetch(base + url, { headers });
+  return { status: r.status, type: r.headers.get('content-type') || '', buf: Buffer.from(await r.arrayBuffer()) };
+}
+
+test('marksheet is refused (409) while any subject in the term is unpublished', async () => {
+  // Term 1: Maths is published, but Science (draft) and all-sections Maths (draft) are not.
+  const r = await call('coord', 'GET', `/api/exams/terms/${termId}/students/${ID.s1}/marksheet.pdf`);
+  assert.equal(r.status, 409, JSON.stringify(r.body));
+  assert.match(r.body.error, /Not every subject is published yet/);
+});
+
+// pdfkit writes text as hex strings in TJ arrays. Decode them so the tests read what a person would read.
+function pdfText(buf) {
+  return buf.toString('latin1').split(/\bET\b/)
+    .map(block => [...block.matchAll(/<([0-9a-fA-F]+)>/g)].map(m => Buffer.from(m[1], 'hex').toString('latin1')).join(''))
+    .filter(Boolean).join('\n');
+}
+
+let term2Id;
+let mathT2;
+let sciT2;
+
+test('a second term with two subjects: marks entered and both subjects published', async () => {
+  const t = await call('coord', 'POST', '/api/exams/terms', { session_id: sessionId, name: 'Second Terminal' });
+  assert.equal(t.status, 201, JSON.stringify(t.body));
+  term2Id = t.body.term.id;
+
+  const m = await call('coord', 'POST', '/api/exams', { term_id: term2Id, class_level: 7, section: 'B', subject_id: mathId, exam_date: '2026-12-01', full_marks: 100, theory_full: 75, internal_full: 25, grading_scale_id: seeScaleId, credit_hours: 5 });
+  assert.equal(m.status, 201, JSON.stringify(m.body));
+  mathT2 = m.body.exam.id;
+  const s = await call('coord', 'POST', '/api/exams', { term_id: term2Id, class_level: 7, section: 'B', subject_id: sciId, exam_date: '2026-12-02', full_marks: 100, grading_scale_id: customScaleId, credit_hours: 3 });
+  assert.equal(s.status, 201, JSON.stringify(s.body));
+  sciT2 = s.body.exam.id;
+
+  const mm = await call('mathT', 'PUT', `/api/exams/${mathT2}/marks`, { marks: [
+    { student_id: ID.s1, ...splitMarks(60, 20) },   // 80 -> A (3.6)
+    { student_id: ID.s2, ...splitMarks(50, 15) },   // 65 -> B (2.8)
+    { student_id: ID.s3, ...splitMarks(60, 20) },   // 80 -> A (3.6)
+  ] });
+  assert.equal(mm.status, 200, JSON.stringify(mm.body));
+  const sm = await call('sciT', 'PUT', `/api/exams/${sciT2}/marks`, { marks: [
+    { student_id: ID.s1, mark: 65 },                // custom scale: 60 -> C (2.0)
+    { student_id: ID.s2, mark: 70 },
+    { student_id: ID.s3, absent: true },            // absent: the term is incomplete
+  ] });
+  assert.equal(sm.status, 200, JSON.stringify(sm.body));
+
+  const early = await call('coord', 'POST', `/api/exams/${mathT2}/publish`);
+  assert.equal(early.status, 200, JSON.stringify(early.body));
+  const blocked = await call('coord', 'GET', `/api/exams/terms/${term2Id}/students/${ID.s1}/marksheet.pdf`);
+  assert.equal(blocked.status, 409, 'Science is still a draft, so no marksheet yet');
+  const pubSci = await call('coord', 'POST', `/api/exams/${sciT2}/publish`);
+  assert.equal(pubSci.status, 200, JSON.stringify(pubSci.body));
+});
+
+test('marksheet PDF: staff with exams.manage and a linked guardian with can_view_results only', async () => {
+  const staff = await raw('coord', `/api/exams/terms/${term2Id}/students/${ID.s1}/marksheet.pdf`);
+  assert.equal(staff.status, 200);
+  assert.equal(staff.type, 'application/pdf');
+  assert.equal(staff.buf.subarray(0, 5).toString('latin1'), '%PDF-');
+
+  const g1 = await raw('g1', `/api/guardian/children/${ID.s1}/terms/${term2Id}/marksheet.pdf`);
+  assert.equal(g1.status, 200, 'linked guardian with can_view_results');
+  assert.equal(g1.type, 'application/pdf');
+
+  assert.equal((await raw('g2', `/api/guardian/children/${ID.s2}/terms/${term2Id}/marksheet.pdf`)).status, 404, 'results switched off for this link');
+  assert.equal((await raw('g3', `/api/guardian/children/${ID.s3}/terms/${term2Id}/marksheet.pdf`)).status, 404, 'restricted link');
+  assert.equal((await raw('g1', `/api/guardian/children/${ID.s2}/terms/${term2Id}/marksheet.pdf`)).status, 404, 'not this guardian\'s child');
+  assert.equal((await raw('mathT', `/api/exams/terms/${term2Id}/students/${ID.s1}/marksheet.pdf`)).status, 403, 'subject teacher has no exams.manage');
+  assert.equal((await raw('mathT', `/api/guardian/children/${ID.s1}/terms/${term2Id}/marksheet.pdf`)).status, 403, 'staff cannot use the guardian route');
+});
+
+test('marksheet footer and body come from the snapshot: version, timestamp, credit-weighted GPA', async () => {
+  const data = marksheetFor(ID.s1, term2Id);
+  assert.equal(data.summary.status, 'complete');
+  assert.equal(data.summary.gpa, 3, '(3.6 x 5 + 2.0 x 3) / 8 = 3.00');
+  assert.deepEqual(data.footer.version_labels, ['v1.01']);
+
+  const buf = await renderMarksheetPdf(data, { compress: false, verifiedAt: new Date('2026-10-12T06:00:00Z') });
+  const txt = pdfText(buf);
+  assert.ok(txt.includes('Version: v1.01 | Date: 2026-10-12'), 'footer version and date');
+  assert.ok(txt.includes('Publish Version ID: v1.01'), 'publish version id');
+  assert.ok(txt.includes('Verification Timestamp: 2026-10-12 11:45'), 'timestamp in Nepal time');
+  assert.ok(txt.includes('Authorized Sign-off ID: '), 'sign-off id');
+  assert.ok(txt.includes('Term result: Complete'));
+  assert.ok(txt.includes('GPA: 3.00'));
+});
+
+test('GPA is withheld for a term with an absent subject, and the term reads Incomplete', async () => {
+  const data = marksheetFor(ID.s3, term2Id);
+  assert.equal(data.summary.status, 'incomplete');
+  assert.equal(data.summary.gpa, null);
+  assert.equal(data.summary.label, 'Incomplete / Not Fully Graded');
+
+  const pub = publishedResultsFor(ID.s3);
+  assert.equal(pub.terms.find(t => t.term_id === term2Id).summary.gpa, null, 'the guardian summary also withholds GPA');
+
+  const txt = pdfText(await renderMarksheetPdf(data, { compress: false }));
+  assert.ok(txt.includes('Term result: Incomplete / Not Fully Graded'));
+  assert.ok(txt.includes('Not printed.'), 'no GPA is printed');
+});
+
+test('a corrected re-publish keeps the old snapshot; the marksheet shows the new version', async () => {
+  const reason = 'Tally error in Mathematics theory marks, checked against scripts';
+  const rq = await call('mathT', 'POST', `/api/exams/${mathT2}/unpublish-requests`, { reason });
+  assert.equal(rq.status, 201, JSON.stringify(rq.body));
+  const ap = await call('coord', 'POST', `/api/exams/unpublish-requests/${rq.body.request.id}/decision`, { decision: 'approve' });
+  assert.equal(ap.status, 200, JSON.stringify(ap.body));
+
+  // While Maths is unpublished, the marksheet is refused for staff and for the guardian.
+  assert.equal((await call('coord', 'GET', `/api/exams/terms/${term2Id}/students/${ID.s1}/marksheet.pdf`)).status, 409);
+  assert.equal((await call('g1', 'GET', `/api/guardian/children/${ID.s1}/terms/${term2Id}/marksheet.pdf`)).status, 409);
+
+  const fix = await call('mathT', 'PUT', `/api/exams/${mathT2}/marks`, { marks: [{ student_id: ID.s1, ...splitMarks(70, 20) }] }); // 90 -> A+
+  assert.equal(fix.status, 200, JSON.stringify(fix.body));
+  const pub2 = await call('coord', 'POST', `/api/exams/${mathT2}/publish`);
+  assert.equal(pub2.status, 200, JSON.stringify(pub2.body));
+  assert.equal(pub2.body.exam.publish_version, 2);
+
+  const marks = db.prepare('SELECT publish_version, total, grade FROM exam_mark_versions WHERE exam_id = ? AND student_id = ? ORDER BY publish_version').all(mathT2, ID.s1);
+  assert.deepEqual(marks.map(r => [r.publish_version, r.total, r.grade]), [[1, 80, 'A'], [2, 90, 'A+']], 'v1 snapshot survives the re-publish');
+  const pubs = db.prepare('SELECT publish_version FROM exam_publications WHERE exam_id = ? ORDER BY publish_version').all(mathT2).map(r => r.publish_version);
+  assert.deepEqual(pubs, [1, 2]);
+
+  const data = marksheetFor(ID.s1, term2Id);
+  assert.deepEqual([...data.footer.version_labels].sort(), ['v1.01', 'v1.02']);
+  const maths = data.rows.find(r => r.subject_name === 'Mathematics');
+  assert.equal(maths.total, 90);
+  assert.equal(maths.grade, 'A+');
+  assert.equal(data.summary.gpa, 3.25, '(4.0 x 5 + 2.0 x 3) / 8 = 3.25');
+
+  const g1 = await call('g1', 'GET', `/api/guardian/children/${ID.s1}/results`);
+  assert.equal(g1.body.terms.find(t => t.term_id === term2Id).summary.gpa, 3.25, 'guardian sees the corrected term');
+  const staff = await raw('coord', `/api/exams/terms/${term2Id}/students/${ID.s1}/marksheet.pdf`);
+  assert.equal(staff.status, 200, 'the marksheet is available again once every subject is published');
 });
 
 // ---------- audit ----------
