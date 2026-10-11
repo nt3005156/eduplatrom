@@ -131,7 +131,7 @@ export default function Sidebar({ mobileOpen, onClose }) {
           ))}
         </nav>
 
-        {!isStaff && (
+        {!isStaff && user?.gamification_enabled && (
           <div style={{ margin: '0 16px 16px', padding: 16, borderRadius: 14, background: 'linear-gradient(165deg, var(--bg-card), var(--bg-elevated))', border: '1px solid var(--line)' }}>
             <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
               <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-dim)' }}>Class {user?.class_level}</span>

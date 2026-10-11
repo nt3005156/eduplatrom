@@ -49,6 +49,11 @@ addColumnIfMissing('users', 'staff_role', 'TEXT');
 // Phase 1 student and guardian profile. Nepal fields (BS dates, IEMIS, NEB) are stored as entered.
 addColumnIfMissing('users', 'phone', 'TEXT');
 addColumnIfMissing('users', 'phone_verified', 'INTEGER DEFAULT 0');
+// Phase 0: account lockout after repeated failed sign-ins.
+addColumnIfMissing('users', 'failed_login_count', 'INTEGER DEFAULT 0');
+addColumnIfMissing('users', 'locked_until', 'TEXT');
+// Phase 0: gamification is off by default. Pilots turn it on per school.
+addColumnIfMissing('settings', 'gamification_enabled', 'INTEGER DEFAULT 0');
 addColumnIfMissing('users', 'dob_ad', 'TEXT');
 addColumnIfMissing('users', 'dob_bs', 'TEXT');
 addColumnIfMissing('users', 'address', 'TEXT');
@@ -383,3 +388,6 @@ seedRbac(db);
 
 export default db;
 export { isNew };
+
+// Phase 1: student photo (a file under /uploads). Access is decided in services/fileAccess.js.
+addColumnIfMissing('users', 'photo_path', 'TEXT');

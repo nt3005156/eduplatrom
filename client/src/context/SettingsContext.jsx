@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { loadFontFamily } from '../fonts/fontLoaders.js';
 import api from '../api/client.js';
 import { useAuth } from './AuthContext.jsx';
 
@@ -33,14 +34,11 @@ const DEFAULTS = {
 export const HEADING_FONT_OPTIONS = ['Fraunces', 'Poppins', 'Playfair Display', 'Space Grotesk', 'Inter'];
 export const BODY_FONT_OPTIONS = ['Inter', 'Roboto', 'Open Sans', 'Nunito', 'Lato'];
 
-const loadedFonts = new Set(['Fraunces', 'Inter']); // pre-loaded via the static index.css @import
+const loadedFonts = new Set(['Fraunces', 'Inter']); // bundled in main.jsx
 function ensureFontLoaded(family) {
   if (!family || loadedFonts.has(family)) return;
   loadedFonts.add(family);
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(family)}:wght@400;500;600;700&display=swap`;
-  document.head.appendChild(link);
+  loadFontFamily(family).catch(() => loadedFonts.delete(family));
 }
 
 function hexToRgb(hex) {

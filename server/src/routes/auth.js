@@ -1,9 +1,25 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import db from '../db/index.js';
-import { signToken, requireAuth, setFileCookie, clearFileCookie, setSessionCookie, clearSessionCookie } from '../middleware/auth.js';
+import { signToken, requireAuth, setFileCookie, clearFileCookie, setSessionCookie, clearSessionCookie,
+  setRefreshCookie, clearRefreshCookie, readCookie, CLIENT_HEADER } from '../middleware/auth.js';
+import { REFRESH_COOKIE, issueRefreshToken, rotateRefreshToken, revokeByToken } from '../services/sessions.js';
+
+// Lockout: 10 failed sign-ins lock the account for 15 minutes. Expires on its own; no admin step needed.
+const LOCK_AFTER = 10;
+const LOCK_MINUTES = 15;
+
+function recordFailedLogin(userId) {
+  db.prepare('UPDATE users SET failed_login_count = COALESCE(failed_login_count, 0) + 1 WHERE id = ?').run(userId);
+  const row = db.prepare('SELECT failed_login_count FROM users WHERE id = ?').get(userId);
+  if (row.failed_login_count >= LOCK_AFTER) {
+    db.prepare(`UPDATE users SET locked_until = datetime('now', ?), failed_login_count = 0 WHERE id = ?`).run(`+${LOCK_MINUTES} minutes`, userId);
+    return { locked: true };
+  }
+  return { locked: false, remaining: LOCK_AFTER - row.failed_login_count };
+}
 import { notifyAdmins } from '../utils/notify.js';
-import { levelForXp } from '../utils/gamification.js';
+import { levelForXp, gamificationEligible } from '../utils/gamification.js';
 import { logAudit } from '../utils/audit.js';
 import { resolveAllPermissions } from '../services/permissions.js';
 import { resolveScope, allowedClassLevels } from '../services/scope.js';
@@ -85,10 +101,24 @@ router.post('/login', (req, res) => {
     return res.status(401).json({ error: 'Invalid email or password' });
   }
 
+  // Lockout: a locked account is refused before the password is even checked.
+  const lock = db.prepare(`SELECT locked_until, (locked_until > datetime('now')) AS is_locked FROM users WHERE id = ?`).get(user.id);
+  if (lock?.is_locked) {
+    return res.status(429).json({ error: `Too many failed sign-in attempts. Try again in about ${LOCK_MINUTES} minutes.`, locked: true });
+  }
+
   const valid = bcrypt.compareSync(password, user.password_hash);
   if (!valid) {
+    const after = recordFailedLogin(user.id);
     logAudit(req, { module: 'auth', action: 'failed_login', description: `Failed login attempt for ${user.email}`, actorOverride: { id: user.id, name: user.name, role: user.role } });
+    if (after.locked) {
+      logAudit(req, { module: 'auth', action: 'account_locked', description: `${user.email} locked for ${LOCK_MINUTES} minutes after ${LOCK_AFTER} failed sign-ins`, actorOverride: { id: user.id, name: user.name, role: user.role } });
+      return res.status(429).json({ error: `Too many failed sign-in attempts. The account is locked for ${LOCK_MINUTES} minutes.`, locked: true });
+    }
     return res.status(401).json({ error: 'Invalid email or password' });
+  }
+  if (user.failed_login_count || user.locked_until) {
+    db.prepare('UPDATE users SET failed_login_count = 0, locked_until = NULL WHERE id = ?').run(user.id);
   }
 
   if (user.role === 'student' && user.approval_status !== 'approved') {
@@ -118,13 +148,40 @@ router.post('/login', (req, res) => {
     pref_class_level: user.pref_class_level, pref_section: user.pref_section, pref_subject_id: user.pref_subject_id,
   };
   const token = signToken({ ...safeUser, session_version: user.session_version || 0 });
+  const refreshToken = issueRefreshToken(user.id, user.session_version || 0);
 
   logAudit(req, { module: 'auth', action: 'login', description: `${user.name} logged in`, actorOverride: safeUser });
 
   setSessionCookie(req, res, token);
+  // The web app gets the refresh token only as an HttpOnly cookie. Other clients (X-NITEX-Client other than
+  // "web") receive it in the body, because they have no cookie jar.
+  const web = req.headers[CLIENT_HEADER] === 'web';
+  if (web) setRefreshCookie(req, res, refreshToken);
   // Guardians never receive a file cookie: they have no file access at all (see requireFileAccess).
   if (user.role !== 'guardian') setFileCookie(req, res, user);
-  res.json({ token, user: safeUser });
+  res.json({ token, user: { ...safeUser, gamification_enabled: gamificationEligible(user.id) }, ...(web ? {} : { refresh_token: refreshToken }) });
+});
+
+/** Renews the access token. The web app sends the refresh cookie; API clients send { refresh_token } in the body. */
+router.post('/refresh', (req, res) => {
+  const cookieToken = readCookie(req.headers.cookie, REFRESH_COOKIE);
+  const web = Boolean(cookieToken);
+  if (web && req.headers[CLIENT_HEADER] !== 'web') return res.status(403).json({ error: 'Request blocked: missing client header' });
+  const presented = cookieToken || req.body?.refresh_token;
+  const r = rotateRefreshToken(presented);
+  if (r.error) {
+    if (web) clearRefreshCookie(req, res);
+    if (r.error === 'reused') {
+      logAudit(req, { module: 'auth', action: 'refresh_reuse', description: 'A used refresh token was presented again. The session was ended.' });
+    }
+    return res.status(401).json({ error: 'Session ended. Please sign in again.' });
+  }
+  const user = db.prepare('SELECT id, name, email, role, class_level, staff_role, session_version FROM users WHERE id = ?').get(r.userId);
+  const token = signToken({ ...user, session_version: user.session_version || 0 });
+  setSessionCookie(req, res, token);
+  if (web) setRefreshCookie(req, res, r.refreshToken);
+  if (user.role !== 'guardian') setFileCookie(req, res, user);
+  res.json({ token, ...(web ? {} : { refresh_token: r.refreshToken }) });
 });
 
 // One-time setup link: a new guardian or student chooses a password here.
@@ -149,7 +206,9 @@ router.post('/setup', (req, res) => {
 });
 
 router.post('/logout', requireAuth, (req, res) => {
+  revokeByToken(readCookie(req.headers.cookie, REFRESH_COOKIE) || req.body?.refresh_token);
   clearSessionCookie(req, res);
+  clearRefreshCookie(req, res);
   clearFileCookie(req, res);
   logAudit(req, { module: 'auth', action: 'logout', description: `${req.user.name} logged out` });
   res.json({ ok: true });
@@ -159,7 +218,7 @@ router.get('/me', requireAuth, (req, res) => {
   const user = db.prepare(`SELECT ${SAFE_FIELDS} FROM users WHERE id = ?`).get(req.user.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
   setFileCookie(req, res, { id: user.id, role: user.role });
-  res.json({ user: { ...user, level: levelForXp(user.xp || 0), streak: streakStatus(user.streak_last_date) } });
+  res.json({ user: { ...user, level: levelForXp(user.xp || 0), streak: streakStatus(user.streak_last_date), gamification_enabled: gamificationEligible(user.id) } });
 });
 
 // Update the current user's own module preferences (default class/section/subject).
@@ -173,7 +232,7 @@ router.put('/me/preferences', requireAuth, (req, res) => {
     newValue: { pref_class_level, pref_section, pref_subject_id },
   });
   const user = db.prepare(`SELECT ${SAFE_FIELDS} FROM users WHERE id = ?`).get(req.user.id);
-  res.json({ user: { ...user, level: levelForXp(user.xp || 0), streak: streakStatus(user.streak_last_date) } });
+  res.json({ user: { ...user, level: levelForXp(user.xp || 0), streak: streakStatus(user.streak_last_date), gamification_enabled: gamificationEligible(user.id) } });
 });
 
 // Resolved permission set + scope summary for the current user — powers the

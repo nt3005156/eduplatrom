@@ -11,9 +11,10 @@ import { awardXp, touchStreak } from '../utils/gamification.js';
 import { logAudit } from '../utils/audit.js';
 import { resolveScope, isWithinScope } from '../services/scope.js';
 import { randomUUID } from 'crypto';
+import { UPLOADS_DIR } from '../config/paths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
+const UPLOAD_DIR = UPLOADS_DIR;
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const ALLOWED_MIME = new Set([

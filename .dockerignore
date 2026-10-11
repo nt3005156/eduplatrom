@@ -10,3 +10,6 @@ e2e
 .env
 .env.*
 !.env.example
+**/*.bak
+server/backups
+**/*.tar.gz

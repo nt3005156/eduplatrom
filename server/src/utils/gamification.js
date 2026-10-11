@@ -1,5 +1,28 @@
 import db from '../db/index.js';
 
+// Phase 0: gamification is a per-school switch, off by default for pilots. When it is on, only students
+// who are at least 13 earn XP and streaks. A student with no date of birth is excluded (fail closed).
+export const GAMIFICATION_MIN_AGE = 13;
+
+/** Age in whole years on a given day, from a YYYY-MM-DD date of birth. Returns 0 for anything unreadable. */
+export function ageOn(dob, today = new Date()) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dob || ''));
+  if (!m) return 0;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  let age = today.getFullYear() - y;
+  const beforeBirthday = today.getMonth() + 1 < mo || (today.getMonth() + 1 === mo && today.getDate() < d);
+  if (beforeBirthday) age -= 1;
+  return age;
+}
+
+export function gamificationEligible(userId) {
+  const school = db.prepare('SELECT gamification_enabled FROM settings WHERE id = 1').get();
+  if (!school?.gamification_enabled) return false;
+  const u = db.prepare('SELECT role, dob_ad FROM users WHERE id = ?').get(userId);
+  if (!u || u.role !== 'student') return false;
+  return ageOn(u.dob_ad) >= GAMIFICATION_MIN_AGE;
+}
+
 const XP_RULES = {
   material_view: 5,
   assignment_submit: 20,
@@ -24,6 +47,7 @@ function daysBetween(a, b) {
 export function awardXp(userId, reason, relatedType = null, relatedId = null) {
   const amount = XP_RULES[reason] ?? 0;
   if (amount <= 0) return null;
+  if (!gamificationEligible(userId)) return null;
 
   const before = db.prepare('SELECT xp FROM users WHERE id = ?').get(userId);
   if (!before) return null;
@@ -45,6 +69,7 @@ export function awardXp(userId, reason, relatedType = null, relatedId = null) {
  * Idempotent within a day — calling multiple times same day won't double count.
  */
 export function touchStreak(userId) {
+  if (!gamificationEligible(userId)) return null;
   const user = db.prepare('SELECT streak_count, longest_streak, streak_last_date FROM users WHERE id = ?').get(userId);
   if (!user) return null;
 

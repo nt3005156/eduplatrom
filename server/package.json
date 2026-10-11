@@ -4,7 +4,9 @@
   "main": "index.js",
   "scripts": {
     "test": "node --test test/*.test.js",
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "backup": "node scripts/backup.js",
+    "restore": "node scripts/restore.js"
   },
   "keywords": [],
   "author": "",

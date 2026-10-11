@@ -145,6 +145,8 @@ Dependency order: Phase 0 blocks everything. Phase 1 blocks 2, 3, 6. Phase 3 blo
 
 **Goal.** Make the existing single-school app safe to run for a pilot school. No new features.
 
+**Status (2026-10-11): in progress. Code items are built and tested; the exit gate is NOT met.** Done: session cookies with 15-minute access tokens and rotating refresh tokens, server-side revocation, lockout, password policy, CSP and self-hosted fonts, CORS, gamification switch, ads removed, in-app error log, backup and restore scripts with a one-machine drill, and the threat model. Not met: OWASP ZAP baseline (needs staging and Docker), Docker build in CI (no Docker here; CI push needs a `workflow`-scope token), a restore on a separate machine, and off-site, scheduled backups. Details: [PHASE0_STATUS.md](PHASE0_STATUS.md), [THREAT_MODEL.md](THREAT_MODEL.md), [RESTORE_RUNBOOK.md](RESTORE_RUNBOOK.md), [RESTORE_DRILL_LOG.md](RESTORE_DRILL_LOG.md).
+
 **Why.** Pilot schools will load real student data. Gaps G1–G11 would be found by the first security review a serious school asks for. Market research also found that international buyers look for encryption, access control, and documented data handling ([MARKET_RESEARCH_AND_MODULES.md](MARKET_RESEARCH_AND_MODULES.md), section 3.2 and FERPA/GDPR notes in `INTERNATIONAL_READINESS.md`).
 
 **Linked to the current system.**
@@ -196,7 +198,7 @@ Dependency order: Phase 0 blocks everything. Phase 1 blocks 2, 3, 6. Phase 3 blo
 
 ### Phase 1: Guardian accounts and richer student profiles
 
-**Status (2026-10-11): built, tested, and pushed to `main`.** See [PHASE1_STATUS.md](PHASE1_STATUS.md) for what exists, the test results (full server suite 93 of 93; browser run 16 of 16), the parent account model assumption, and the open `/uploads` ownership gap. The photo field is deferred until that gap is fixed. The 3-pilot-school exit gate is not yet met.
+**Status (2026-10-11): built and tested. The open items are closed in code: the `/uploads` ownership gap is fixed (files open only for the people their records allow), the student photo field is built as an API, and the 500-row import test passes. The 3-pilot-school exit gate is NOT met and cannot be measured without pilot schools.** See [PHASE1_STATUS.md](PHASE1_STATUS.md) for the rules, the decisions to confirm with the school, and the test results.
 
 **Goal.** Add parents and guardians as users, linked to their children, with per-child permissions. Expand the student record to what schools and IEMIS need.
 
@@ -241,7 +243,7 @@ Dependency order: Phase 0 blocks everything. Phase 1 blocks 2, 3, 6. Phase 3 blo
 
 ### Phase 2: Alerts that reach parents (SMS, WhatsApp, email)
 
-**Status (2026-10-11): complete in code and tested (full server suite 143 of 143), and run end to end on a live local server.** Adapters are written for Sparrow SMS (Nepal), the WhatsApp Cloud API (approved templates), and SMTP. A live run sent an attendance alert through the worker to the Sparrow protocol. See [PHASE2_STATUS.md](PHASE2_STATUS.md) for what exists, the tests, and what the school or vendor must supply. The exit gate (95% delivery in a pilot month) and the real-cost check need live vendor accounts and a pilot school, so they are not met yet. The production default still holds messages until a provider is configured.
+**Status (2026-10-11): complete in code and tested (full server suite 198 of 198), and run end to end on a live local server. No code is left except items that need a vendor account.** Adapters are written for Sparrow SMS (Nepal), the WhatsApp Cloud API (approved templates), and SMTP. A live run sent an attendance alert through the worker to the Sparrow protocol. See [PHASE2_STATUS.md](PHASE2_STATUS.md) for what exists, the tests, and what the school or vendor must supply. The exit gate (95% delivery in a pilot month) and the real-cost check need live vendor accounts and a pilot school, so they are not met yet. The production default still holds messages until a provider is configured.
 
 **Goal.** Send attendance alerts, notices, and later fee reminders to parents by the channel they actually use, including parents with no app.
 
@@ -648,10 +650,10 @@ The tenancy path is **database per school**. The user chose it on 2026-10-11, wh
 NITEX is production-ready for a given market when every item below is true for that market.
 
 **Security and privacy**
-- [ ] Sessions in HttpOnly cookies; CSRF protection; short-lived tokens; server-side revocation.
+- [x] Sessions in HttpOnly cookies; CSRF protection; short-lived tokens; server-side revocation.
 - [ ] CSP, HSTS, restricted CORS; OWASP ZAP baseline clean at high severity.
-- [ ] Password policy and lockout; no demo accounts in production.
-- [ ] All file access authenticated (or signed URLs with short expiry).
+- [x] Password policy and lockout; no demo accounts in production.
+- [x] All file access authenticated (or signed URLs with short expiry).
 - [ ] Cross-tenant tests pass for every route (Phase 7).
 - [ ] Privacy export and erasure work for every data type, including guardians, payments, and health records.
 - [ ] Penetration test completed with no open high or critical findings.

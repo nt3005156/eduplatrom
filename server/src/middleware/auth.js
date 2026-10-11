@@ -1,5 +1,7 @@
 import jwt from 'jsonwebtoken';
 import db from '../db/index.js';
+import { ACCESS_TTL_SECONDS, REFRESH_COOKIE, REFRESH_TTL_SECONDS, revokeAllRefreshTokens } from '../services/sessions.js';
+import { canReadUpload } from '../services/fileAccess.js';
 
 const IS_PROD = process.env.NODE_ENV === 'production';
 if (IS_PROD && (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32)) {
@@ -37,10 +39,10 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-insecure-secret';
 // accounts, manage branding/site settings, or view the Audit Log.
 // -----------------------------------------------------------------------------
 
-// Sessions last one school day. A password reset, disable or archive revokes
-// every session immediately (see revokeSessions), so the lifetime can be short.
+// The access token lasts 15 minutes. A refresh token (services/sessions.js) renews it for up to one
+// school day. A password reset, disable or archive revokes every session immediately (revokeSessions).
 export const SESSION_COOKIE = 'nitex_session';
-const SESSION_TTL_SECONDS = 8 * 60 * 60;
+const SESSION_TTL_SECONDS = ACCESS_TTL_SECONDS;
 
 export function signToken(user) {
   return jwt.sign(
@@ -130,6 +132,7 @@ export function sessionIsCurrent(payload, acct) {
 /** Invalidate every token issued so far for this user (password reset, disable, archive, anonymize). */
 export function revokeSessions(userId) {
   db.prepare('UPDATE users SET session_version = COALESCE(session_version, 0) + 1 WHERE id = ?').run(userId);
+  revokeAllRefreshTokens(userId);
 }
 
 /** Only the super-admin role — full system access (branding, audit log, teacher account management, etc). */
@@ -189,13 +192,22 @@ export function clearSessionCookie(req, res) {
   res.append('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${cookieSecure(req) ? '; Secure' : ''}`);
 }
 
+// The refresh cookie is sent only to the auth routes, so it never travels with ordinary API calls or file requests.
+export function setRefreshCookie(req, res, token) {
+  res.append('Set-Cookie', `${REFRESH_COOKIE}=${token}; Path=/api/auth; HttpOnly; SameSite=Lax; Max-Age=${REFRESH_TTL_SECONDS}${cookieSecure(req) ? '; Secure' : ''}`);
+}
+
+export function clearRefreshCookie(req, res) {
+  res.append('Set-Cookie', `${REFRESH_COOKIE}=; Path=/api/auth; HttpOnly; SameSite=Lax; Max-Age=0${cookieSecure(req) ? '; Secure' : ''}`);
+}
+
 // --- Authenticated file access -------------------------------------------
 // Uploaded files (student submissions, application documents, materials) are
 // personal data, so they are never served anonymously. A browser cannot send an
 // Authorization header on a plain <a href>, so login sets a short-lived HttpOnly
 // cookie scoped to /uploads. API clients may still send a Bearer token.
 export const FILE_COOKIE = 'nitex_file';
-const FILE_COOKIE_MAX_AGE = SESSION_TTL_SECONDS;
+const FILE_COOKIE_MAX_AGE = REFRESH_TTL_SECONDS;
 
 export function setFileCookie(req, res, user) {
   const sv = db.prepare('SELECT session_version FROM users WHERE id = ?').get(user.id)?.session_version || 0;
@@ -207,7 +219,7 @@ export function clearFileCookie(req, res) {
   res.append('Set-Cookie', `${FILE_COOKIE}=; Path=/uploads; HttpOnly; SameSite=Lax; Max-Age=0${cookieSecure(req) ? '; Secure' : ''}`);
 }
 
-function readCookie(header, name) {
+export function readCookie(header, name) {
   if (!header) return null;
   for (const part of header.split(';')) {
     const [k, ...v] = part.trim().split('=');
@@ -231,6 +243,11 @@ export function requireFileAccess(req, res, next) {
     }
     // Guardians have no file access in Phase 1: attachments are not yet scoped to a family.
     if (payload.role === 'guardian') return res.status(403).json({ error: 'Guardian accounts cannot open school files' });
+    // Ownership and scope: the file must belong to a record this user may see. Denied and missing
+    // files return the same 404, so the response does not reveal which file names exist.
+    let name = null;
+    try { name = decodeURIComponent(req.path).replace(/^\//, ''); } catch { name = null; }
+    if (!canReadUpload(payload.id, name)) return res.status(404).json({ error: 'File not found' });
     req.user = payload;
     next();
   } catch {

@@ -2,7 +2,7 @@
 
 Date: 2026-10-11. Plan reference: [PRODUCTION_ROADMAP.md](PRODUCTION_ROADMAP.md), Phase 1.
 
-**Status: built, tested, and pushed to `origin/main`.** The exit gate (3 pilot schools with guardian accounts for at least 80% of students) cannot be measured until a pilot school is live. It is not met yet.
+**Status (2026-10-11): built and tested. The three open items from earlier are closed: the `/uploads` ownership gap is fixed, the photo field is built, and the 500-row import test exists and passes. The exit gate (3 pilot schools with guardian accounts for at least 80% of students) cannot be measured until a pilot school is live. It is not met.**
 
 ---
 
@@ -26,7 +26,9 @@ Date: 2026-10-11. Plan reference: [PRODUCTION_ROADMAP.md](PRODUCTION_ROADMAP.md)
 
 | Check | Result | Evidence |
 |---|---|---|
-| Full server suite | **93 of 93 pass** | `cd server && npm test` (node:test). Includes the two `privacy-uploads` tests that had failed before the export fix. |
+| Full server suite | **198 of 198 pass** (at the 2026-10-11 Phase 0 and 1 close-out; was 93 at the first Phase 1 commit) | `cd server && npm test` (node:test) |
+| File ownership rules (new) | 11 of 11 | `server/test/uploads-ownership.test.js` |
+| Student photo (new) | 12 of 12 | `server/test/student-photo.test.js` |
 | Guardian rules | 19 of 19 | `server/test/guardians.test.js` |
 | Import rules | 10 of 10 | `server/test/student-import.test.js` |
 | Isolation and scope | 10 of 10 | `server/test/guardian-isolation.test.js` |
@@ -74,21 +76,36 @@ The browser suite was rerun against a restarted server with a fresh database aft
 
 If the user chooses a different model (for example, one parent login across several schools), the schema and the link rules change.
 
-## 5. Open risk that stays open
+## 5. `/uploads` ownership gap: fixed
 
-**`/uploads` ownership gap (pre-existing, not fixed in Phase 1).**
+**Before:** any signed-in non-guardian could open any upload by its path, including files from another class.
 
-- `GET /uploads/*` (`app.js`, `middleware/auth.js` `requireFileAccess`) accepts any signed-in user who is not a guardian. The user can present a file cookie or a bearer token.
-- The check confirms the user is signed in and active. It does **not** check who uploaded the file, which class or subject it belongs to, or whether the user is in scope for it.
-- Consequence: a signed-in student or staff member who knows or guesses a file path can open it, including files belonging to another class.
-- Phase 1 mitigates one part of this: guardians are refused file access entirely.
-- Required fix (planned, not started): record an owner and a scope (class, section, subject) on every upload row, and check it on each read. Phase 7 moves uploads into a per-school directory as well. Until then, this stays on the risk register.
+**Now:** every file is checked against the records that point at it (`server/src/services/fileAccess.js`, called from `requireFileAccess` in `middleware/auth.js`). Each record carries its owner and scope.
+
+| File source | Who may open it |
+|---|---|
+| Material, quiz question media | Students in the class; teachers assigned to that class and subject; the uploader |
+| Assignment attachment | Students in the class and section; teachers assigned to it; the creator |
+| Submission (including multi-file lists, resubmissions, regrade requests) | The student who sent it; teachers assigned to that assignment |
+| Question bank media | Teachers assigned to the subject; the creator |
+| Application document | The applicant; academic head and coordinator |
+| Student photo | The student; teachers of the student's class; admins |
+| School branding (logo, favicon, hero image) | Any signed-in, non-guardian user |
+| A file no record refers to | Admins only |
+| Everyone | Guardians: no file access. Disabled or archived accounts: no access. |
+
+Denied and missing files return the same 404, so the server does not reveal which file names exist. Names containing folders, `..`, or a leading dot are refused.
+
+**Decisions to confirm with the school:**
+1. Academic head and coordinator (staff roles) can open every school file. This matches their oversight role. If the school wants them limited to their classes, change `SCHOOL_WIDE_STAFF` in `fileAccess.js`.
+2. Classmates cannot see one another's photos. Only the student, teachers of the class, and admins can.
+3. Existing files with no record are admin-only. The first request for such a file by a student now returns 404 (a test was updated to say so).
 
 ## 6. Known limits and what is not in Phase 1
 
 - No fee, invoice, or payment views for guardians (Phase 3).
 - No report cards for guardians (Phase 4).
-- No photo field on students. This is deferred on purpose. A photo is personal data, and `/uploads` (section 5) would let any signed-in staff member or student open it. Store photos only after the ownership fix.
+- Student photo: **built as an API** (`POST` and `DELETE /api/users/:id/photo`). Accepts JPEG, PNG or WebP only, checked by file content, up to 2 MB. Only the student or an admin may change it. The admin and student pages do not show or upload a photo yet; that screen is still to build.
 - Guardians cannot edit their own name, email, or phone. The profile page is read-only, and the school office makes changes. Self-service edits need phone verification (Phase 2).
 - No SMS, WhatsApp, or email delivery of setup links or notices (Phase 2).
 - No legal review of guardian access rules, custody handling, or the Nepal data-protection position (open decision 8 in the roadmap).
@@ -96,10 +113,10 @@ If the user chooses a different model (for example, one parent login across seve
 
 ## 7. Next steps
 
-1. Commit and push the Phase 1 work, once the token is passed in one `git push` command only, not stored (see the Phase 1 commit notes in the chat).
-2. Decide the parent account model (section 4) and the SMS provider (roadmap section 4, item 4).
-3. Start the `/uploads` ownership fix as the first item of Phase 2 or as a stand-alone security fix before pilots.
-4. Find pilot schools for the Phase 1 exit gate.
+1. Pilot schools for the exit gate (3 schools, 80% guardian accounts).
+2. Decide the parent account model (section 4) and the legal review of guardian access (roadmap open decision 8).
+3. Build the photo screens (admin student page and the student's own profile) on top of the API above.
+4. Confirm the two file-access decisions in section 5 with the school.
 
 ## 8. Credential note
 

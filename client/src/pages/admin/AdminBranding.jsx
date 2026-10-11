@@ -358,6 +358,12 @@ export default function AdminBranding() {
                 <ToggleRow label="New Submission Alerts" hint="Notify staff when a student submits an assignment" checked={!!form.notify_new_submission} onChange={v => set('notify_new_submission', v ? 1 : 0)} />
                 <ToggleRow label="Grading Complete Alerts" hint="Notify students when their work is graded" checked={!!form.notify_grading_complete} onChange={v => set('notify_grading_complete', v ? 1 : 0)} />
               </div>
+              <div className="card card-pad">
+                <div className="flex items-center gap-2" style={{ marginBottom: 10 }}>
+                  <Bell size={17} color="var(--primary)" /><h3 style={{ fontSize: 16 }}>XP & Streaks</h3>
+                </div>
+                <ToggleRow label="Enable XP & Study Streaks" hint="Off by default. When on, only students aged 13 or older (by date of birth) earn XP and streaks. Students without a date of birth are excluded." checked={!!form.gamification_enabled} onChange={v => set('gamification_enabled', v ? 1 : 0)} />
+              </div>
             </div>
           )}
 

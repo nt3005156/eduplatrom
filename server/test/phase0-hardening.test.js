@@ -58,7 +58,7 @@ test('login sets an HttpOnly session cookie that scripts cannot read', async () 
   assert.match(s.setCookie, /HttpOnly/);
   assert.match(s.setCookie, /SameSite=Lax/);
   assert.match(s.setCookie, /Path=\//);
-  assert.match(s.setCookie, /Max-Age=28800/, 'session lasts 8 hours');
+  assert.match(s.setCookie, /Max-Age=900/, 'access token lasts 15 minutes; a refresh token renews it');
 });
 
 test('the session cookie alone authenticates reads', async () => {
@@ -148,7 +148,7 @@ test('a disabled teacher loses an active session immediately', async () => {
   assert.equal(after.status, 401);
 });
 
-test('CSP allows only the app\'s own scripts, plus Google Fonts for styles and fonts', async () => {
+test('CSP allows only the app\'s own scripts, styles and fonts (fonts are self-hosted, no Google Fonts)', async () => {
   const r = await call('GET', '/api/health', { client: false });
   const csp = r.headers.get('content-security-policy');
   assert.ok(csp, 'Content-Security-Policy header is present');
@@ -156,7 +156,9 @@ test('CSP allows only the app\'s own scripts, plus Google Fonts for styles and f
   assert.doesNotMatch(csp, /script-src[^;]*unsafe-/, 'no unsafe-inline or unsafe-eval for scripts');
   assert.match(csp, /object-src 'none'/);
   assert.match(csp, /frame-ancestors 'self'/);
-  assert.match(csp, /style-src 'self' 'unsafe-inline' https:\/\/fonts\.googleapis\.com/);
+  assert.match(csp, /style-src 'self' 'unsafe-inline'(;|$)/, 'styles: same origin only');
+  assert.match(csp, /font-src 'self' data:(;|$)/, 'fonts: same origin only');
+  assert.doesNotMatch(csp, /googleapis|gstatic/, 'no Google Fonts origin');
   assert.equal(r.headers.get('x-powered-by'), null, 'server identity is hidden');
 });
 

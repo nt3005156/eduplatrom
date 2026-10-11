@@ -785,3 +785,32 @@ CREATE TABLE IF NOT EXISTS message_optouts (
   created_by INTEGER,
   PRIMARY KEY (recipient, channel)
 );
+
+-- Phase 0: refresh tokens. Only a hash is stored. Rotated on each use; a family is revoked on reuse.
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  family_id TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  session_version INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now')),
+  expires_at TEXT NOT NULL,
+  used_at TEXT,
+  revoked_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_refresh_family ON refresh_tokens(family_id);
+CREATE INDEX IF NOT EXISTS idx_refresh_user ON refresh_tokens(user_id);
+
+-- Phase 0: in-app error log. One row per distinct error (fingerprint). Stores a redacted message and
+-- the route only. Never stores request bodies, headers, cookies, or stack lines that contain user data.
+CREATE TABLE IF NOT EXISTS error_events (
+  fingerprint TEXT PRIMARY KEY,
+  message TEXT NOT NULL,
+  location TEXT,
+  route TEXT,
+  status INTEGER,
+  count INTEGER NOT NULL DEFAULT 1,
+  first_seen TEXT NOT NULL DEFAULT (datetime('now')),
+  last_seen TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_error_events_last_seen ON error_events(last_seen);

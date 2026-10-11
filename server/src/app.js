@@ -35,8 +35,12 @@ import privacyRoutes from './routes/privacy.js';
 import { adminRouter as guardianAdminRoutes, portalRouter as guardianPortalRoutes } from './routes/guardians.js';
 import messageRoutes from './routes/messages.js';
 import studentImportRoutes from './routes/studentImport.js';
+import opsRoutes from './routes/ops.js';
+import studentPhotoRoutes from './routes/studentPhotos.js';
+import { captureError } from './services/errorLog.js';
 import { requireFileAccess } from './middleware/auth.js';
 import db from './db/index.js';
+import { UPLOADS_DIR } from './config/paths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLIENT_DIST = path.join(__dirname, '..', '..', 'client', 'dist');
@@ -54,7 +58,7 @@ export function createApp() {
   }
 
   // Security headers. The policy lists exactly what the app loads: its own
-  // scripts and styles, plus Google Fonts (index.css and SettingsContext).
+  // scripts, styles and fonts. Fonts are self-hosted in the Vite build, so no third-party origin is needed.
   // No inline scripts and no eval; the Vite build emits none.
   app.use(helmet({
     crossOriginEmbedderPolicy: false,
@@ -63,8 +67,8 @@ export function createApp() {
       directives: {
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'"],
-        styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
-        fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        fontSrc: ["'self'", 'data:'],
         imgSrc: ["'self'", 'data:', 'blob:'],
         connectSrc: ["'self'"],
         objectSrc: ["'none'"],
@@ -84,7 +88,6 @@ export function createApp() {
   app.use(express.json({ limit: '2mb' }));
   // Files: public only under uploads/public (branding). Everything else needs
   // a signed-in user (HttpOnly cookie for browser links, or a Bearer token).
-  const UPLOADS_DIR = path.join(__dirname, 'uploads');
   app.use('/uploads/public', express.static(path.join(UPLOADS_DIR, 'public'), { dotfiles: 'deny', index: false, maxAge: '1d' }));
   app.use('/uploads', (req, res, next) => {
     // Logos uploaded before the public folder existed keep working on the login page.
@@ -115,6 +118,7 @@ export function createApp() {
   app.use('/api/announcements', announcementRoutes);
   app.use('/api/settings', settingsRoutes);
   app.use('/api/notifications', notificationRoutes);
+  app.use('/api/users', studentPhotoRoutes);
   app.use('/api/users', userRoutes);
   app.use('/api/audit', auditRoutes);
   app.use('/api/applications', applicationRoutes);
@@ -129,6 +133,7 @@ export function createApp() {
   app.use('/api/guardian', guardianPortalRoutes);
   app.use('/api/messages', messageRoutes);
   app.use('/api/student-import', studentImportRoutes);
+  app.use('/api/ops', opsRoutes);
 
   // Unknown API paths must return JSON 404, not the SPA shell.
   app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
@@ -145,6 +150,8 @@ export function createApp() {
 
   app.use((err, req, res, next) => {
     if (process.env.NODE_ENV !== 'test') console.error(err);
+    const status = err?.status || err?.statusCode || 500;
+    if (status >= 500) captureError(err, { route: `${req.method} ${req.route?.path || req.path.split('/').slice(0, 4).join('/')}`, status });
     // Multer / our own upload validation errors carry a user-safe message.
     if (err?.name === 'MulterError' || /file type|not allowed|too large/i.test(err?.message || '')) {
       return res.status(400).json({ error: err.message });

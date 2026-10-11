@@ -12,6 +12,7 @@ import { awardXp, touchStreak } from '../utils/gamification.js';
 import { logAudit } from '../utils/audit.js';
 import { resolveScope, isWithinScope, scopeWhereClause } from '../services/scope.js';
 import { randomUUID } from 'crypto';
+import { UPLOADS_DIR } from '../config/paths.js';
 
 // Assignment descriptions support basic rich text (per the redesign spec), but the raw
 // HTML comes from teacher input and is stored verbatim — sanitize server-side too as
@@ -23,7 +24,7 @@ const RICH_TEXT_OPTS = {
 const sanitizeDescription = (html) => sanitizeHtml(html || '', RICH_TEXT_OPTS);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
+const UPLOAD_DIR = UPLOADS_DIR;
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const storage = multer.diskStorage({

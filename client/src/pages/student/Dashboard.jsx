@@ -54,6 +54,7 @@ export default function StudentDashboard() {
 
   return (
     <AppLayout title={`Welcome back, ${user.name.split(' ')[0]}`} subtitle={`Class ${data.class_level} • Here's your learning snapshot`}>
+      {user?.gamification_enabled && (
       <div className="card card-pad" style={{ marginBottom: 20, display: 'flex', alignItems: 'center', gap: 24, flexWrap: 'wrap' }}>
         <div style={{ flex: '1 1 260px', minWidth: 240 }}>
           <XpBar level={user?.level} xp={user?.xp || 0} />
@@ -79,6 +80,7 @@ export default function StudentDashboard() {
           </span>
         </div>
       </div>
+      )}
 
       <div className="flex gap-3" style={{ flexWrap: 'wrap', marginBottom: 24 }}>
         <StatCard icon={BookOpen} label="Materials Explored" value={`${data.materials.viewed}/${data.materials.total}`} sub={`${data.materials.pct}% coverage`} color="var(--primary)" />

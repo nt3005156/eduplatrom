@@ -59,7 +59,7 @@ cd client && npm ci && npm run build
 cd ../server && npm ci && NODE_ENV=production JWT_SECRET=... ADMIN_EMAIL=... ADMIN_PASSWORD=... node src/index.js
 ```
 
-Tests: `cd server && npm test` (server) and `python3 e2e/attendance_e2e.py` (browser, against a running server).
+Tests: `cd server && npm test` (server, 198 tests) and the browser checks in `e2e/` (for example `python3 e2e/session_e2e.py`, `python3 e2e/refresh_e2e.py`) against a running server.
 
 ## Attendance (new)
 
@@ -208,7 +208,13 @@ client/            React 19 + Vite + React Router
 
 ## Phase 0 deployment notes
 
-- Sessions are HttpOnly cookies that last 8 hours. Admin password resets, disabling and archiving end a user's sessions immediately. Everyone signs in once after the upgrade.
+- Sessions use an HttpOnly cookie that lasts 15 minutes and renews itself in the background with a refresh cookie. A browser left idle for 8 hours must sign in again. Every sign-in ends after 30 days at most (set `SESSION_MAX_DAYS` to change it). Admin password resets, disabling and archiving end a user's sessions immediately.
+- Accounts lock for 15 minutes after 10 wrong passwords.
+- Student files open only for the people their records allow. Admins can open any file.
+- XP and streaks are off by default. Turn them on in Branding settings; only students aged 13 or older earn them.
+- Fonts are served from the app itself. No request goes to Google.
+- Backups: `cd server && node scripts/backup.js`. Restore: `node scripts/restore.js <archive> --db <path> --uploads <dir>`. See `docs/RESTORE_RUNBOOK.md`. Set `UPLOADS_DIR` and `BACKUP_DIR` for production.
+- Errors are recorded in-app and listed at `GET /api/ops/errors` for admins.
 - The API accepts no cross-origin browser calls by default. To allow another site, set `CORS_ORIGINS` (comma-separated).
 - Passwords need at least 12 characters.
 - Docker: `docker compose up --build` after copying `.env.example` to `.env`.

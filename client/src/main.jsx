@@ -1,5 +1,10 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import '@fontsource-variable/fraunces'
+import '@fontsource-variable/inter'
+import '@fontsource-variable/jetbrains-mono/wght.css'
+import '@fontsource/noto-sans-devanagari/400.css'
+import '@fontsource/noto-sans-devanagari/600.css'
 import './index.css'
 import App from './App.jsx'
 

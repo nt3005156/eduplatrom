@@ -9,9 +9,10 @@ import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { notifyAdmins, notifyUser } from '../utils/notify.js';
 import { logAudit } from '../utils/audit.js';
 import { randomUUID } from 'crypto';
+import { UPLOADS_DIR } from '../config/paths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
+const UPLOAD_DIR = UPLOADS_DIR;
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const storage = multer.diskStorage({

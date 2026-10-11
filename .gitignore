@@ -23,3 +23,6 @@ npm-debug.log*
 .DS_Store
 .vscode/
 .idea/
+
+# Backups contain student data. Never commit them.
+server/backups/

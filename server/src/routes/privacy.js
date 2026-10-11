@@ -14,10 +14,11 @@ import { Router } from 'express';
 import db from '../db/index.js';
 import { requireAuth, requireAdmin, revokeSessions } from '../middleware/auth.js';
 import { logAudit } from '../utils/audit.js';
+import { UPLOADS_DIR } from '../config/paths.js';
 
 const router = Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
+
 
 const PROFILE_FIELDS = `id, name, email, role, class_level, section, gender, approval_status,
   account_status, staff_role, created_at, phone, dob_ad, dob_bs, address, admission_no, roll_no, iemis_id,
@@ -94,12 +95,13 @@ router.post('/users/:id/anonymize', requireAuth, requireAdmin, (req, res) => {
   if (id === req.user.id) return res.status(400).json({ error: 'You cannot anonymize your own account' });
   if (req.body?.confirm !== 'ANONYMIZE') return res.status(400).json({ error: 'Type ANONYMIZE to confirm' });
 
-  const user = db.prepare('SELECT id, name, role FROM users WHERE id = ?').get(id);
+  const user = db.prepare('SELECT id, name, role, photo_path FROM users WHERE id = ?').get(id);
   if (!user) return res.status(404).json({ error: 'Account not found' });
 
   let filesRemoved = 0;
   const tx = db.transaction(() => {
     revokeSessions(id);
+    if (deleteUpload(user.photo_path)) filesRemoved++;
     const subs = db.prepare('SELECT id, file_path, attachments FROM submissions WHERE student_id = ?').all(id);
     for (const s of subs) {
       if (deleteUpload(s.file_path)) filesRemoved++;
@@ -118,7 +120,7 @@ router.post('/users/:id/anonymize', requireAuth, requireAdmin, (req, res) => {
         avatar_color = '#B2BEC3', account_status = 'archived', pref_class_level = NULL, pref_section = NULL,
         pref_subject_id = NULL, phone = NULL, phone_verified = 0, dob_ad = NULL, dob_bs = NULL, address = NULL,
         admission_no = NULL, roll_no = NULL, iemis_id = NULL, neb_reg_no = NULL, blood_group = NULL,
-        emergency_contact_name = NULL, emergency_contact_phone = NULL WHERE id = ?`)
+        emergency_contact_name = NULL, emergency_contact_phone = NULL, photo_path = NULL WHERE id = ?`)
       .run(`Former ${user.role} #${id}`, `anonymized-${id}@deleted.invalid`, id);
   });
   tx();

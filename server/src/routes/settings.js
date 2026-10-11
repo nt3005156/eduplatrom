@@ -7,11 +7,12 @@ import db from '../db/index.js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { logAudit } from '../utils/audit.js';
 import { randomUUID } from 'crypto';
+import { UPLOADS_DIR } from '../config/paths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Branding (logo/favicon) is shown on the public login page, so it lives in a
 // public folder. Everything else under /uploads requires sign-in.
-const UPLOAD_DIR = path.join(__dirname, '..', 'uploads', 'public');
+const UPLOAD_DIR = path.join(UPLOADS_DIR, 'public');
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const storage = multer.diskStorage({
@@ -102,9 +103,12 @@ const ALLOWED_FIELDS = [
   'homepage_headline', 'homepage_subheadline',
   'email_from_name', 'email_from_address', 'email_smtp_host', 'email_smtp_port',
   'notify_new_registration', 'notify_new_submission', 'notify_grading_complete',
+  'gamification_enabled',
 ];
 
 router.put('/', requireAuth, requireAdmin, (req, res) => {
+  // SQLite stores 0/1, not true/false.
+  if (req.body.gamification_enabled !== undefined) req.body.gamification_enabled = req.body.gamification_enabled ? 1 : 0;
   const updates = [];
   const values = [];
   const previous = db.prepare('SELECT * FROM settings WHERE id = 1').get();

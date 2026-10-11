@@ -85,8 +85,9 @@ test('a signed-in user can open a private upload (Bearer header)', async () => {
 test('login sets an HttpOnly cookie scoped to /uploads, so plain browser links work', async () => {
   assert.match(tokens.studentCookie, /^nitex_file=.+; Path=\/uploads; HttpOnly; SameSite=Lax/);
   const cookie = tokens.studentCookie.split(';')[0];
+  // The cookie authenticates the student. The file is not linked to any record, so it is not theirs to open.
   const r = await api('GET', `/uploads/${PRIVATE}`, { cookie });
-  assert.equal(r.status, 200);
+  assert.equal(r.status, 404, 'a signed-in student cannot open a file that no record gives them access to');
 });
 
 test('public branding folder and legacy logos stay reachable without sign-in', async () => {
